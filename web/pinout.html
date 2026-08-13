@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP-Hunter — Распиновка</title>
+    <style>
+        :root {
+            --bg-color: #000000;
+            --card-bg: #0c0c0c;
+            --card-hover: #111111;
+            --accent: #00ff00;
+            --accent-hover: #00cc00;
+            --text: #ffffff;
+            --text-dim: #808080;
+            --border: #333333;
+            --glow: 0 0 15px rgba(0, 255, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Courier New', Courier, monospace;
+            letter-spacing: 0.5px;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: url('skull.png');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-repeat: no-repeat;
+            color: var(--text);
+            line-height: 1.6;
+            padding-bottom: 60px;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: -1;
+        }
+
+        header {
+            background: var(--card-bg);
+            border-bottom: 2px solid var(--accent);
+            padding: 20px 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: var(--glow);
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 20px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: var(--accent);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-shadow: 0 0 8px var(--accent);
+            border: 2px solid var(--accent);
+            padding: 5px 15px;
+            background: #000;
+            box-shadow: inset 0 0 10px rgba(0,255,0,0.2);
+        }
+
+        .hero {
+            padding: 60px 0 40px;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 2.8rem;
+            margin-bottom: 20px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .hero h1 span {
+            color: var(--accent);
+            text-shadow: var(--glow);
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            max-width: 700px;
+            margin: 0 auto 30px;
+        }
+
+        .btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent);
+            padding: 12px 28px;
+            border-radius: 0px;
+            text-decoration: none;
+            font-weight: 700;
+            transition: all 0.2s;
+            border: 2px solid var(--accent);
+            cursor: pointer;
+            box-shadow: var(--glow);
+            text-transform: uppercase;
+        }
+
+        .btn:hover {
+            background: var(--accent);
+            color: #000;
+            box-shadow: var(--glow), inset 0 0 15px #000;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text);
+            border: 2px solid var(--border);
+            margin-left: 10px;
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text);
+            background: var(--border);
+            color: #000;
+        }
+
+        .pinout-container {
+            background: var(--card-bg);
+            border: 2px solid var(--border);
+            border-left: 5px solid var(--accent);
+            border-radius: 0px;
+            padding: 30px;
+            margin-top: 40px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .pinout-container svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        footer {
+            margin-top: 80px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 10px;
+            height: 1.2rem;
+            background: var(--accent);
+            margin-left: 5px;
+            vertical-align: middle;
+            animation: blink 1s step-end infinite;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="container nav">
+            <a href="index.html" class="logo">>_ ESP-Hunter <span class="cursor"></span></a>
+            <div>
+                <a href="https://github.com/ESRHunter/ESP-Hunter" class="btn btn-secondary" target="_blank">[GitHub]</a>
+                <a href="index.html" class="btn btn-secondary" style="margin-left:10px;">[На главную]</a>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h1>РАСПИНОВКА <br><span>ESP-Hunter</span></h1>
+            <p>Полная схема подключения всех модулей к ESP32-S3. Нажмите на компоненты для увеличения.</p>
+            <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                <a href="index.html" class="btn btn-secondary">← Назад</a>
+            </div>
+        </section>
+
+        <section class="pinout-container">
+            <!-- Вставляем SVG-схему -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" style="background-color: #0a0a0a;">
+                <defs>
+                    <style>
+                        text { font-family: 'Courier New', Courier, monospace; fill: #00ff66; }
+                        .pin-label { fill: #00ff66; font-size: 11px; }
+                        .module-title { fill: #00ff66; font-size: 14px; font-weight: bold; }
+                        .line { stroke: #00ff66; stroke-width: 2; fill: none; }
+                        .dashed { stroke-dasharray: 4,4; }
+                        .box { fill: #0c0c0c; stroke: #00ff66; stroke-width: 1.5; }
+                        .pin-dot { fill: #00ff66; }
+                    </style>
+                </defs>
+                <text x="450" y="30" text-anchor="middle" font-size="22" font-weight="bold" fill="#00ff66">ESP-Hunter Pinout Diagram</text>
+                <rect x="320" y="250" width="260" height="150" rx="5" class="box" />
+                <text x="450" y="285" text-anchor="middle" class="module-title">ESP32-S3</text>
+                <text x="450" y="305" text-anchor="middle" fill="#808080" font-size="10">Dual-Core LX7</text>
+                <text x="330" y="340" class="pin-label">3.3V</text>
+                <text x="330" y="360" class="pin-label">GND</text>
+                <circle cx="315" cy="340" r="3" class="pin-dot" />
+                <circle cx="315" cy="360" r="3" class="pin-dot" />
+                <text x="565" y="340" class="pin-label">3.3V</text>
+                <text x="565" y="360" class="pin-label">GND</text>
+                <circle cx="585" cy="340" r="3" class="pin-dot" />
+                <circle cx="585" cy="360" r="3" class="pin-dot" />
+                <rect x="50" y="100" width="180" height="120" rx="5" class="box" />
+                <text x="140" y="130" text-anchor="middle" class="module-title">TFT ST7735</text>
+                <text x="140" y="150" text-anchor="middle" fill="#808080" font-size="10">128x128 SPI</text>
+                <text x="60" y="175" class="pin-label">SCK → 12</text>
+                <text x="60" y="195" class="pin-label">MOSI → 11</text>
+                <text x="60" y="215" class="pin-label">CS → 10</text>
+                <text x="60" y="235" class="pin-label">DC → 9</text>
+                <text x="60" y="255" class="pin-label">RST → 8</text>
+                <line x1="230" y1="175" x2="320" y2="175" class="line" />
+                <line x1="230" y1="195" x2="320" y2="195" class="line" />
+                <line x1="230" y1="215" x2="320" y2="215" class="line" />
+                <line x1="230" y1="235" x2="320" y2="235" class="line" />
+                <line x1="230" y1="255" x2="320" y2="255" class="line" />
+                <rect x="50" y="450" width="180" height="80" rx="5" class="box" />
+                <text x="140" y="475" text-anchor="middle" class="module-title">MicroSD</text>
+                <text x="140" y="495" text-anchor="middle" fill="#808080" font-size="10">SPI</text>
+                <text x="60" y="520" class="pin-label">CS → 15</text>
+                <line x1="230" y1="520" x2="320" y2="520" class="line" />
+                <rect x="640" y="100" width="180" height="100" rx="5" class="box" />
+                <text x="730" y="130" text-anchor="middle" class="module-title">PN532</text>
+                <text x="730" y="150" text-anchor="middle" fill="#808080" font-size="10">RFID I2C</text>
+                <text x="650" y="175" class="pin-label">SDA → 1</text>
+                <text x="650" y="195" class="pin-label">SCL → 2</text>
+                <line x1="640" y1="175" x2="580" y2="175" class="line" />
+                <line x1="640" y1="195" x2="580" y2="195" class="line" />
+                <rect x="640" y="300" width="180" height="140" rx="5" class="box" />
+                <text x="730" y="330" text-anchor="middle" class="module-title">CC1101</text>
+                <text x="730" y="350" text-anchor="middle" fill="#808080" font-size="10">Sub-GHz</text>
+                <text x="650" y="375" class="pin-label">CS → 14</text>
+                <text x="650" y="395" class="pin-label">GDO0 → 17</text>
+                <text x="650" y="415" class="pin-label">GDO2 → 21</text>
+                <text x="650" y="435" class="pin-label">SCK/MOSI/MISO</text>
+                <text x="650" y="455" class="pin-label">→ 12/11/13</text>
+                <line x1="640" y1="375" x2="580" y2="375" class="line" />
+                <line x1="640" y1="395" x2="580" y2="395" class="line" />
+                <line x1="640" y1="415" x2="580" y2="415" class="line" />
+                <line x1="640" y1="435" x2="580" y2="435" class="line" />
+                <rect x="640" y="500" width="180" height="80" rx="5" class="box" />
+                <text x="730" y="525" text-anchor="middle" class="module-title">IR TX/RX</text>
+                <text x="650" y="555" class="pin-label">TX → 7</text>
+                <text x="650" y="575" class="pin-label">RX → 18</text>
+                <line x1="640" y1="555" x2="580" y2="555" class="line" />
+                <line x1="640" y1="575" x2="580" y2="575" class="line" />
+                <rect x="50" y="600" width="180" height="100" rx="5" class="box" />
+                <text x="140" y="625" text-anchor="middle" class="module-title">D-Pad Buttons</text>
+                <text x="60" y="655" class="pin-label">UP → 4</text>
+                <text x="60" y="675" class="pin-label">DOWN → 5</text>
+                <text x="60" y="695" class="pin-label">OK → 3</text>
+                <text x="60" y="715" class="pin-label">ESC → 6</text>
+                <line x1="230" y1="655" x2="320" y2="655" class="line" />
+                <line x1="230" y1="675" x2="320" y2="675" class="line" />
+                <line x1="230" y1="695" x2="320" y2="695" class="line" />
+                <line x1="230" y1="715" x2="320" y2="715" class="line" />
+                <text x="450" y="620" text-anchor="middle" fill="#808080" font-size="10">Общие шины: 3.3V, GND, SPI (SCK/MOSI/MISO)</text>
+                <text x="450" y="640" text-anchor="middle" fill="#808080" font-size="10">Все пины INPUT_PULLUP для кнопок</text>
+                <rect x="50" y="720" width="800" height="40" rx="3" fill="#0c0c0c" stroke="#333" />
+                <text x="70" y="745" fill="#00ff66" font-size="11">⚡ Все подключения проверять на соответствие реальной сборке. Лицензия MIT.</text>
+            </svg>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 ESP-Hunter Project. Лицензия MIT. <br><span style="color:var(--accent);">>_ System ready.</span></p>
+        </div>
+    </footer>
+
+</body>
+</html>
