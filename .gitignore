@@ -1,0 +1,18 @@
+# Папки сборки и временные файлы Arduino
+*.o
+*.elf
+*.bin
+build/
+__pycache__/
+
+# Папки Python и PyInstaller
+dist/
+build/
+*.spec
+venv/
+env/
+__pycache__/
+
+# Файлы конфигурации ОС
+.DS_Store
+Thumbs.db
