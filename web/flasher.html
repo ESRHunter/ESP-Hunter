@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP-Hunter Terminal // Web Flasher</title>
-    <meta name="description" content="Автономный браузерный прошивальщик микроконтроллеров ESP32-S3 через Web Serial API.">
+    <title>ESP-Hunter Terminal // Flasher Hub</title>
+    <meta name="description" content="Автономный флешер ESP32-S3 с авто-скачиванием прошивки с GitHub.">
     <style>
         :root {
             --bg-color: #050806;
@@ -28,17 +28,12 @@
             letter-spacing: 0.5px;
         }
 
-        html {
-            scroll-behavior: smooth;
-        }
-
         body {
             background-color: var(--bg-color);
             color: var(--text);
             line-height: 1.6;
             padding-bottom: 60px;
             overflow-x: hidden;
-            position: relative;
         }
 
         .scanline-overlay {
@@ -49,34 +44,21 @@
             background-size: 100% 4px;
             z-index: 999;
             opacity: 0.6;
-            transition: opacity 0.3s;
-        }
-
-        .scanline-overlay.disabled {
-            display: none;
         }
 
         .glass {
             background: var(--card-bg);
-            backdrop-filter: blur(10px) saturate(160%);
-            -webkit-backdrop-filter: blur(10px) saturate(160%);
+            backdrop-filter: blur(10px);
             border: 1px solid var(--border);
             border-radius: 6px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(0, 255, 102, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
             transition: all 0.25s ease;
-        }
-
-        .glass:hover {
-            border-color: var(--border-glow);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), 0 0 15px var(--accent-glow);
         }
 
         .container {
             max-width: 1150px;
             margin: 0 auto;
             padding: 0 20px;
-            position: relative;
-            z-index: 2;
         }
 
         header {
@@ -100,20 +82,14 @@
             font-weight: 800;
             color: var(--accent);
             text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
             border: 1px solid var(--accent);
             padding: 6px 14px;
             background: #000;
-            box-shadow: 0 0 10px var(--accent-glow);
-            text-transform: uppercase;
         }
 
         .nav-links {
             display: flex;
             gap: 10px;
-            align-items: center;
         }
 
         .nav-link {
@@ -121,13 +97,11 @@
             text-decoration: none;
             font-size: 0.9rem;
             padding: 6px 12px;
-            border: 1px solid transparent;
-            transition: all 0.2s;
         }
 
-        .nav-link:hover, .nav-link.active {
+        .nav-link.active {
             color: var(--accent);
-            border-color: var(--border);
+            border: 1px solid var(--border);
             background: rgba(0, 255, 102, 0.05);
         }
 
@@ -141,38 +115,19 @@
             font-size: 0.9rem;
             text-decoration: none;
             font-weight: 700;
-            transition: all 0.2s;
             border: 1px solid var(--accent);
             cursor: pointer;
-            text-transform: uppercase;
             box-shadow: 0 0 10px var(--accent-glow);
         }
 
         .btn:hover {
             background: var(--accent);
             color: #000;
-            box-shadow: 0 0 20px var(--accent);
-        }
-
-        .btn:disabled {
-            border-color: var(--border);
-            color: var(--text-dim);
-            cursor: not-allowed;
-            box-shadow: none;
-            background: rgba(0, 0, 0, 0.4);
         }
 
         .btn-secondary {
             color: var(--text-dim);
             border-color: var(--border);
-            box-shadow: none;
-        }
-
-        .btn-secondary:hover {
-            border-color: var(--text);
-            color: var(--accent);
-            background: rgba(255, 255, 255, 0.03);
-            box-shadow: none;
         }
 
         .page-title {
@@ -184,21 +139,12 @@
         .page-title h1 {
             font-size: 2.2rem;
             color: #fff;
-            text-transform: uppercase;
         }
 
         .page-title h1 span {
             color: var(--accent);
-            text-shadow: 0 0 15px var(--accent-glow);
         }
 
-        .page-title p {
-            color: var(--text-dim);
-            font-size: 0.9rem;
-            margin-top: 6px;
-        }
-
-        /* Инструкция по BOOT */
         .instruction-card {
             padding: 20px;
             margin-bottom: 25px;
@@ -207,9 +153,7 @@
 
         .instruction-card h3 {
             color: var(--accent);
-            font-size: 1rem;
             margin-bottom: 10px;
-            text-transform: uppercase;
         }
 
         .instruction-card ol {
@@ -218,121 +162,25 @@
             font-size: 0.85rem;
         }
 
-        .instruction-card li {
-            margin-bottom: 6px;
-        }
-
-        .instruction-card .badge {
+        .code-block {
             background: #000;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-            padding: 1px 6px;
-            font-size: 0.75rem;
-            font-weight: bold;
-        }
-
-        /* Форма прошивки */
-        .flasher-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 25px;
-            margin-bottom: 30px;
-        }
-
-        .flasher-card {
-            padding: 25px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-
-        .flasher-card h2 {
-            color: #fff;
-            font-size: 1.1rem;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 8px;
-        }
-
-        .form-group {
-            margin-bottom: 18px;
-        }
-
-        .form-group label {
-            display: block;
-            color: var(--text-dim);
+            border: 1px solid var(--border);
+            padding: 15px;
+            position: relative;
             font-size: 0.8rem;
-            margin-bottom: 6px;
-            text-transform: uppercase;
+            color: var(--accent);
+            overflow-x: auto;
         }
 
-        select, input[type="text"], input[type="file"] {
-            width: 100%;
-            padding: 10px 12px;
-            background: #000;
-            border: 1px solid var(--border);
-            color: #fff;
-            font-family: inherit;
-            font-size: 0.85rem;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        select:focus, input[type="text"]:focus {
-            border-color: var(--accent);
-        }
-
-        .preset-buttons {
-            display: flex;
-            gap: 8px;
-            margin-top: 6px;
-        }
-
-        .preset-btn {
-            background: #000;
-            border: 1px solid var(--border);
-            color: var(--text-dim);
+        .copy-btn {
+            position: absolute;
+            top: 10px; right: 10px;
+            background: var(--border);
+            color: var(--text);
+            border: none;
             padding: 4px 10px;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             cursor: pointer;
-            font-family: inherit;
-        }
-
-        .preset-btn:hover {
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-
-        /* Консоль логов */
-        .console-card {
-            padding: 20px;
-            margin-bottom: 30px;
-        }
-
-        .console-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .console-header h3 {
-            color: var(--accent);
-            font-size: 1rem;
-            text-transform: uppercase;
-        }
-
-        .console-body {
-            background: #000;
-            border: 1px solid var(--border);
-            padding: 16px;
-            height: 280px;
-            overflow-y: auto;
-            font-size: 0.85rem;
-            color: var(--accent);
-            white-space: pre-wrap;
-            word-break: break-all;
         }
 
         #toast {
@@ -343,8 +191,6 @@
             color: var(--accent);
             padding: 12px 20px;
             font-size: 0.85rem;
-            box-shadow: 0 0 15px var(--accent-glow);
-            z-index: 1000;
             display: none;
         }
 
@@ -356,18 +202,11 @@
             border-top: 1px solid var(--border);
             padding-top: 25px;
         }
-
-        @media (max-width: 850px) {
-            .flasher-grid { grid-template-columns: 1fr; }
-            .nav-links { display: none; }
-        }
     </style>
-    <!-- Официальный бандл esptool-js -->
-    <script src="https://unpkg.com/esptool-js@0.4.3/bundle.js"></script>
 </head>
 <body>
 
-    <div class="scanline-overlay" id="scanlines"></div>
+    <div class="scanline-overlay"></div>
 
     <header>
         <div class="container nav">
@@ -376,87 +215,43 @@
                 <a href="index.html" class="nav-link">Главная</a>
                 <a href="pinout.html" class="nav-link">[ Pinout ]</a>
                 <a href="flasher.html" class="nav-link active">[ Flasher ]</a>
-                <a href="dashboard.html" class="nav-link">[ Dashboard ]</a>
-                <a href="arcade.html" class="nav-link">[ Arcade ]</a>
+                
             </div>
-            <div style="display:flex; gap:10px; align-items:center;">
-                <button class="filter-btn" id="toggle-scanlines" style="background:transparent; border:1px solid var(--border); color:var(--text-dim); padding:6px 12px; cursor:pointer;" title="Вкл/Выкл CRT эффект">CRT FX</button>
-                <a href="https://github.com/ESRHunter/ESP-Hunter" class="btn btn-secondary" target="_blank">[ GitHub ]</a>
-            </div>
+            <a href="https://github.com/ESRHunter/ESP-Hunter" class="btn btn-secondary" target="_blank">[ GitHub ]</a>
         </div>
     </header>
 
     <main class="container">
         <div class="page-title">
-            <h1>Web Flasher <span>ESP32-S3</span></h1>
-            <p>Прямая браузерная прошивка микроконтроллера через Web Serial API без установки дополнительных утилит.</p>
+            <h1>Desktop Flasher Hub // <span>ESP32-S3</span></h1>
+            <p>Автономный локальный прошивальщик с автоматической загрузкой прошивки из открытых релизов GitHub.</p>
         </div>
 
-        <!-- Инструкция BOOT -->
+        <div class="glass" style="padding: 25px; margin-bottom: 25px;">
+            <h2 style="color:#fff; margin-bottom: 10px;">Центр Управления Прошивкой</h2>
+            <p style="color:var(--text-dim); font-size:0.9rem; margin-bottom: 20px;">
+                Для 100% стабильной прошивки плат с нативным USB или чипами CH343 используется локальное Python-приложение.
+                Оно автоматически обращается к GitHub API, скачивает актуальный `.bin` файл и прошивает вашу плату через `esptool`.
+            </p>
+
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px;">
+                
+                <a href="https://github.com/ESRHunter/ESP-Hunter/releases" class="btn btn-secondary" target="_blank">📦 Релизы на GitHub</a>
+            </div>
+        </div>
+
         <div class="instruction-card glass">
-            <h3>⚡ Порядок Подключения ESP32-S3:</h3>
+            <h3>⚡ Порядок Подключения Устройства:</h3>
             <ol>
-                <li>Подключите плату ESP32-S3 к компьютеру по USB-C кабелю.</li>
-                <li>Зажмите и удерживайте кнопку <span class="badge">BOOT</span> (или 0).</li>
-                <li>Нажмите и отпустите кнопку <span class="badge">RESET</span> (RST / EN).</li>
-                <li>Отпустите кнопку <span class="badge">BOOT</span>. Плата перейдёт в режим Bootloader.</li>
-                <li>Нажмите кнопку <strong>Connect</strong>, выберите COM-порт устройства и начните прошивку.</li>
+                <li>Подключите плату ESP32-S3 по USB-C кабелю.</li>
+                <li>Зажмите физическую кнопку <strong>BOOT</strong> (или 0).</li>
+                <li>Нажмите и отпустите кнопку <strong>RESET</strong> (RST / EN).</li>
+                <li>Отпустите кнопку <strong>BOOT</strong>.</li>
+                <li>Запустите `ESP-Hunter_flasher.exe`, выберите ваш COM-порт и нажмите <strong>DOWNLOAD & FLASH LATEST</strong>.</li>
             </ol>
         </div>
 
-        <!-- Карточки управления -->
-        <div class="flasher-grid">
-            <!-- Шаг 1: Порт и Подключение -->
-            <div class="flasher-card glass">
-                <div>
-                    <h2>1. Связь с Устройством</h2>
-                    <div class="form-group">
-                        <label for="baud-rate">Скорость Порта (Baud Rate):</label>
-                        <select id="baud-rate">
-                            <option value="115200">115200 (Безопасная)</option>
-                            <option value="460800">460800</option>
-                            <option value="921600" selected>921600 (Быстрая)</option>
-                        </select>
-                    </div>
-                </div>
-                <div style="display:flex; gap:10px;">
-                    <button id="btn-connect" class="btn">Connect</button>
-                    <button id="btn-disconnect" class="btn btn-secondary" disabled>Disconnect</button>
-                </div>
-            </div>
-
-            <!-- Шаг 2: Выбор файла и смещения -->
-            <div class="flasher-card glass">
-                <div>
-                    <h2>2. Файл Прошивки (.bin)</h2>
-                    <div class="form-group">
-                        <label for="file-offset">Смещение (Offset):</label>
-                        <input type="text" id="file-offset" value="0x0">
-                        <div class="preset-buttons">
-                            <button class="preset-btn" onclick="setOffset('0x0')">0x0 (Combined)</button>
-                            <button class="preset-btn" onclick="setOffset('0x10000')">0x10000 (App)</button>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="file-binary">Бинарный файл (.bin):</label>
-                        <input type="file" id="file-binary" accept=".bin">
-                    </div>
-                </div>
-                <button id="btn-flash" class="btn" disabled>Program Device</button>
-            </div>
-        </div>
-
-        <!-- Терминал Логов -->
-        <div class="console-card glass">
-            <div class="console-header">
-                <h3>Консоль Записи & Лог Выполнения</h3>
-                <div style="display:flex; gap:10px;">
-                    <button class="btn btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="clearLog()">Очистить</button>
-                    <button class="btn btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="copyLog()">Скопировать</button>
-                </div>
-            </div>
-            <div class="console-body" id="log-container">&gt;_ Ожидание инициализации подключения к ESP32-S3...</div>
-        </div>
+        
     </main>
 
     <div id="toast">Уведомление</div>
@@ -469,155 +264,15 @@
     </footer>
 
     <script>
-        const scanlines = document.getElementById('scanlines');
-        const toast = document.getElementById('toast');
-
-        const btnConnect = document.getElementById('btn-connect');
-        const btnDisconnect = document.getElementById('btn-disconnect');
-        const btnFlash = document.getElementById('btn-flash');
-        const baudRateSelect = document.getElementById('baud-rate');
-        const fileInput = document.getElementById('file-binary');
-        const offsetInput = document.getElementById('file-offset');
-        const logContainer = document.getElementById('log-container');
-
-        let device = null;
-        let transport = null;
-        let esploader = null;
-
-        function showToast(msg) {
-            toast.innerText = msg;
-            toast.style.display = 'block';
-            setTimeout(() => { toast.style.display = 'none'; }, 2500);
-        }
-
-        function log(text) {
-            logContainer.innerText += '\n' + text;
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        function clearLog() {
-            logContainer.innerText = '>_ Консоль очищена.';
-        }
-
-        function copyLog() {
-            navigator.clipboard.writeText(logContainer.innerText).then(() => {
-                showToast('Лог скопирован в буфер!');
+        function copyBuildCmd() {
+            const cmd = document.getElementById('build-cmd').innerText;
+            navigator.clipboard.writeText(cmd).then(() => {
+                const toast = document.getElementById('toast');
+                toast.innerText = 'Инструкция скопирована!';
+                toast.style.display = 'block';
+                setTimeout(() => { toast.style.display = 'none'; }, 2500);
             });
         }
-
-        function setOffset(val) {
-            offsetInput.value = val;
-            showToast(`Смещение установлено на ${val}`);
-        }
-
-        // Переключение CRT эффекта
-        document.getElementById('toggle-scanlines').addEventListener('click', function() {
-            scanlines.classList.toggle('disabled');
-            showToast(scanlines.classList.contains('disabled') ? 'CRT Эффект отключен' : 'CRT Эффект включен');
-        });
-
-        // Проверка Web Serial
-        if (!("serial" in navigator)) {
-            log("❌ Ошибка: Ваш браузер не поддерживает Web Serial API. Используйте Google Chrome или Microsoft Edge.");
-            btnConnect.disabled = true;
-        }
-
-        // Подключение к устройству
-        btnConnect.addEventListener('click', async () => {
-            try {
-                log("🔌 Запрос выбора COM-порта...");
-                const port = await navigator.serial.requestPort();
-                
-                log("⏳ Подключение к устройству...");
-                transport = new EsptoolJS.Transport(port);
-                
-                const baudRate = parseInt(baudRateSelect.value);
-                esploader = new EsptoolJS.ESPLoader({
-                    transport: transport,
-                    baudrate: baudRate,
-                    terminal: {
-                        writeLine: (msg) => log(msg),
-                        write: (msg) => log(msg)
-                    }
-                });
-
-                log("🔍 Определение типа чипа (пожалуйста, подождите)...");
-                device = await esploader.main();
-                
-                log("✅ Подключено успешно!");
-                log("Микроконтроллер: " + device);
-
-                btnConnect.disabled = true;
-                btnDisconnect.disabled = false;
-                btnFlash.disabled = false;
-                showToast('Подключено к ESP32!');
-            } catch (err) {
-                log("❌ Ошибка подключения: " + err.message);
-                log("💡 Подсказка: Зажмите BOOT, нажмите RESET, затем нажмите Connect.");
-            }
-        });
-
-        // Отключение от устройства
-        btnDisconnect.addEventListener('click', async () => {
-            if (transport) {
-                await transport.disconnect();
-            }
-            log("🔌 Устройство отключено.");
-            btnConnect.disabled = false;
-            btnDisconnect.disabled = true;
-            btnFlash.disabled = true;
-            showToast('Устройство отключено');
-        });
-
-        // Старт прошивки
-        btnFlash.addEventListener('click', async () => {
-            if (!fileInput.files.length) {
-                alert("Пожалуйста, выберите файл прошивки .bin!");
-                return;
-            }
-
-            const file = fileInput.files[0];
-            const offset = parseInt(offsetInput.value, 16);
-
-            if (isNaN(offset)) {
-                alert("Некорректный адрес смещения (Offset)!");
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                const fileData = e.target.result;
-                try {
-                    btnFlash.disabled = true;
-                    log(`🚀 Старт прошивки файла: ${file.name} (${fileData.byteLength} байт)...`);
-
-                    const fileArray = [{
-                        data: EsptoolJS.arrayBufferToBinaryString(fileData),
-                        address: offset
-                    }];
-
-                    await esploader.writeFlash({
-                        fileArray: fileArray,
-                        flashSize: 'keep',
-                        eraseAll: false,
-                        compress: true,
-                        reportProgress: (fileIndex, written, total) => {
-                            const percent = Math.round((written / total) * 100);
-                            log(`Прогресс прошивки: ${percent}% (${written}/${total} байт)`);
-                        }
-                    });
-
-                    log("🎉 Прошивка завершена успешно! Нажмите RESET на плате для перезагрузки.");
-                    showToast('Прошивка успешно завершена!');
-                } catch (err) {
-                    log("❌ Ошибка записи прошивки: " + err.message);
-                } finally {
-                    btnFlash.disabled = false;
-                }
-            };
-
-            reader.readAsArrayBuffer(file);
-        });
     </script>
 </body>
 </html>

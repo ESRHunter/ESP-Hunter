@@ -451,8 +451,7 @@
                 <a href="index.html" class="nav-link">Главная</a>
                 <a href="pinout.html" class="nav-link">[ Pinout ]</a>
                 <a href="flasher.html" class="nav-link">[ Flasher ]</a>
-                <a href="dashboard.html" class="nav-link">[ Dashboard ]</a>
-                <a href="arcade.html" class="nav-link">[ Arcade ]</a>
+
             </div>
             <div style="display:flex; gap:10px; align-items:center;">
                 <button class="filter-btn" id="toggle-scanlines" title="Вкл/Выкл CRT эффект">CRT FX</button>
@@ -465,12 +464,12 @@
         <!-- Hero секция с интерактивным терминалом -->
         <section class="hero">
             <div class="hero-info">
-                <h1>Универсальная Экосистема <span>ESP32-S3</span></h1>
+                <h1>Универсальная Экосистема <span>ESP-Hunter</span></h1>
                 <p>Открытый комплекс решений для микроконтроллера ESP32-S3: веб-флешер, интерактивная распиновка, дистанционный монитор и кроссплатформенное ПК-приложение.</p>
                 <div class="hero-buttons">
-                    <a href="flasher.html" class="btn">⚡ Веб-Флешер</a>
+                    <a href="flasher.html" class="btn">📦 ПК Клиент (.exe)</a>
                     <a href="pinout.html" class="btn btn-secondary">🔌 Схема Пинов</a>
-                    <a href="https://github.com/ESRHunter/ESP-Hunter/releases" class="btn btn-secondary" target="_blank">📦 ПК Клиент (.exe)</a>
+                    
                 </div>
             </div>
 
@@ -501,19 +500,15 @@
         <!-- Фильтры категорий -->
         <div class="filter-bar">
             <button class="filter-btn active" data-filter="all">Все модули</button>
-            <button class="filter-btn" data-filter="display">Дисплей & Управление</button>
             <button class="filter-btn" data-filter="wireless">Сеть & Беспроводные</button>
             <button class="filter-btn" data-filter="sensors">Датчики & ИК</button>
             <button class="filter-btn" data-filter="system">Системные</button>
+            <button class="filter-btn" data-filter="hack">Хак</button>
         </div>
 
         <!-- Карточки возможностей -->
         <section class="features-grid" id="features">
-            <div class="feature-card glass" data-cat="display">
-                <div class="tag">UI & Streaming</div>
-                <h3>Remote Display</h3>
-                <p>Трансляция кадра дисплея ST7735 (128x128) в ПК/Android приложение в реальном времени и удаленное D-Pad управление.</p>
-            </div>
+            
 
             <div class="feature-card glass" data-cat="system">
                 <div class="tag">OTA Firmware</div>
@@ -521,17 +516,13 @@
                 <p>Автоматическая прошивка свежих билдов напрямую из GitHub Releases без использования сторонних прошивальщиков.</p>
             </div>
 
-            <div class="feature-card glass" data-cat="wireless">
-                <div class="tag">Sub-GHz RF</div>
-                <h3>CC1101 Hub</h3>
-                <p>Монитор уровня радиосигнала (RSSI/LQI) и сканирование эфира на частотах 315 / 433 / 868 МГц с выгрузкой логов на MicroSD.</p>
+            <div class="feature-card glass" data-cat="hack">
+                <div class="tag">BADUSB / Evil Portal</div>
+                <h3>Esp32 S3</h3>
+                <p>Эмуляция мыши, клавиатуры, скрипты. Эмуляция WIFI хоста с сотраницей входа в Google аккаунт.</p>
             </div>
 
-            <div class="feature-card glass" data-cat="system">
-                <div class="tag">Desktop App</div>
-                <h3>Serial Manager</h3>
-                <p>Кроссплатформенное клиентское приложение в стиле qFlipper с монитором порта, логами выполнения и графическим пультом.</p>
-            </div>
+          
 
             <div class="feature-card glass" data-cat="sensors">
                 <div class="tag">NFC / RFID</div>
@@ -647,7 +638,7 @@ void setup() {
 
                 switch(cmd) {
                     case 'help':
-                        resp.innerHTML = 'Доступные команды: <span style="color:#fff">specs, pinout, flasher, dashboard, arcade, clear, status</span>';
+                        resp.innerHTML = 'Доступные команды: <span style="color:#fff">specs, pinout, flasher, clear, status</span>';
                         break;
                     case 'specs':
                         resp.innerHTML = 'ESP32-S3 | 240MHz | 16MB Flash | 8MB PSRAM | TFT ST7735';
@@ -660,14 +651,7 @@ void setup() {
                         resp.innerHTML = 'Переход в веб-флешер...';
                         setTimeout(() => window.location.href = 'flasher.html', 800);
                         break;
-                    case 'dashboard':
-                        resp.innerHTML = 'Переход в веб-дашборд...';
-                        setTimeout(() => window.location.href = 'dashboard.html', 800);
-                        break;
-                    case 'arcade':
-                        resp.innerHTML = 'Запуск аркады Cyber-Pong...';
-                        setTimeout(() => window.location.href = 'arcade.html', 800);
-                        break;
+                    
                     case 'status':
                         resp.innerHTML = 'Система: <span style="color:var(--accent)">ONLINE</span> | WiFi API: Active | Storage: Mounted';
                         break;
