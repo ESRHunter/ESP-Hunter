@@ -3,68 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP-Hunter — Распиновка</title>
+    <title>ESP-Hunter Terminal // Pinout Diagram</title>
+    <meta name="description" content="Интерактивная распиновка и схема подключения периферийных модулей к ESP32-S3.">
     <style>
         :root {
-            --bg-color: #000000;
-            --card-bg: #0c0c0c;
-            --card-hover: #111111;
-            --accent: #00ff00;
-            --accent-hover: #00cc00;
-            --text: #ffffff;
-            --text-dim: #808080;
-            --border: #333333;
-            --glow: 0 0 15px rgba(0, 255, 0, 0.4);
+            --bg-color: #050806;
+            --card-bg: rgba(10, 18, 12, 0.65);
+            --card-hover: rgba(16, 28, 19, 0.85);
+            --accent: #00ff66;
+            --accent-dim: #00993d;
+            --accent-glow: rgba(0, 255, 102, 0.25);
+            --text: #e0f2e6;
+            --text-dim: #7aa387;
+            --border: #183822;
+            --border-glow: #285e39;
+            --font-mono: 'Fira Code', 'Courier New', Courier, monospace;
         }
 
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: var(--font-mono);
             letter-spacing: 0.5px;
+        }
+
+        html {
+            scroll-behavior: smooth;
         }
 
         body {
             background-color: var(--bg-color);
-            background-image: url('skull.png');
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-            background-repeat: no-repeat;
             color: var(--text);
             line-height: 1.6;
             padding-bottom: 60px;
+            overflow-x: hidden;
             position: relative;
         }
 
-        body::before {
-            content: '';
+        .scanline-overlay {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            z-index: -1;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: linear-gradient(rgba(0, 255, 102, 0.02) 50%, rgba(0, 0, 0, 0.25) 50%);
+            background-size: 100% 4px;
+            z-index: 999;
+            opacity: 0.6;
+            transition: opacity 0.3s;
         }
 
-        header {
+        .scanline-overlay.disabled {
+            display: none;
+        }
+
+        .glass {
             background: var(--card-bg);
-            border-bottom: 2px solid var(--accent);
-            padding: 20px 0;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: var(--glow);
+            backdrop-filter: blur(10px) saturate(160%);
+            -webkit-backdrop-filter: blur(10px) saturate(160%);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(0, 255, 102, 0.1);
+            transition: all 0.25s ease;
+        }
+
+        .glass:hover {
+            border-color: var(--border-glow);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), 0 0 15px var(--accent-glow);
         }
 
         .container {
-            max-width: 1100px;
+            max-width: 1150px;
             margin: 0 auto;
             padding: 0 20px;
             position: relative;
-            z-index: 1;
+            z-index: 2;
+        }
+
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--border);
+            background: rgba(5, 8, 6, 0.85);
+            backdrop-filter: blur(12px);
         }
 
         .nav {
@@ -74,232 +96,629 @@
         }
 
         .logo {
-            font-size: 1.4rem;
+            font-size: 1.2rem;
             font-weight: 800;
             color: var(--accent);
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 10px;
-            text-shadow: 0 0 8px var(--accent);
-            border: 2px solid var(--accent);
-            padding: 5px 15px;
+            gap: 8px;
+            border: 1px solid var(--accent);
+            padding: 6px 14px;
             background: #000;
-            box-shadow: inset 0 0 10px rgba(0,255,0,0.2);
-        }
-
-        .hero {
-            padding: 60px 0 40px;
-            text-align: center;
-        }
-
-        .hero h1 {
-            font-size: 2.8rem;
-            margin-bottom: 20px;
-            font-weight: 800;
+            box-shadow: 0 0 10px var(--accent-glow);
             text-transform: uppercase;
         }
 
-        .hero h1 span {
-            color: var(--accent);
-            text-shadow: var(--glow);
+        .nav-links {
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
 
-        .hero p {
-            font-size: 1.2rem;
+        .nav-link {
             color: var(--text-dim);
-            max-width: 700px;
-            margin: 0 auto 30px;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 6px 12px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            color: var(--accent);
+            border-color: var(--border);
+            background: rgba(0, 255, 102, 0.05);
         }
 
         .btn {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             background: transparent;
             color: var(--accent);
-            padding: 12px 28px;
-            border-radius: 0px;
+            padding: 10px 22px;
+            font-size: 0.9rem;
             text-decoration: none;
             font-weight: 700;
             transition: all 0.2s;
-            border: 2px solid var(--accent);
+            border: 1px solid var(--accent);
             cursor: pointer;
-            box-shadow: var(--glow);
             text-transform: uppercase;
+            box-shadow: 0 0 10px var(--accent-glow);
         }
 
         .btn:hover {
             background: var(--accent);
             color: #000;
-            box-shadow: var(--glow), inset 0 0 15px #000;
+            box-shadow: 0 0 20px var(--accent);
         }
 
         .btn-secondary {
-            background: transparent;
-            color: var(--text);
-            border: 2px solid var(--border);
-            margin-left: 10px;
+            color: var(--text-dim);
+            border-color: var(--border);
             box-shadow: none;
         }
 
         .btn-secondary:hover {
             border-color: var(--text);
-            background: var(--border);
-            color: #000;
+            color: var(--accent);
+            background: rgba(255, 255, 255, 0.03);
+            box-shadow: none;
         }
 
-        .pinout-container {
-            background: var(--card-bg);
-            border: 2px solid var(--border);
-            border-left: 5px solid var(--accent);
-            border-radius: 0px;
-            padding: 30px;
-            margin-top: 40px;
+        .page-title {
+            padding: 30px 0 10px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 25px;
+        }
+
+        .page-title h1 {
+            font-size: 2.2rem;
+            color: #fff;
+            text-transform: uppercase;
+        }
+
+        .page-title h1 span {
+            color: var(--accent);
+            text-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .page-title p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-top: 6px;
+        }
+
+        .filter-bar {
             display: flex;
-            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
         }
 
-        .pinout-container svg {
+        .filter-btn {
+            background: rgba(0,0,0,0.5);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .filter-btn:hover, .filter-btn.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(0, 255, 102, 0.05);
+        }
+
+        .svg-container {
+            padding: 20px;
+            border: 1px solid var(--border);
+            background: #000;
+            margin-bottom: 30px;
+            text-align: center;
+            overflow-x: auto;
+        }
+
+        .svg-container svg {
             max-width: 100%;
             height: auto;
         }
 
+        .table-section {
+            margin-top: 30px;
+        }
+
+        .table-section h2 {
+            color: var(--accent);
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+        }
+
+        .search-box {
+            width: 100%;
+            background: #000;
+            border: 1px solid var(--border);
+            color: #fff;
+            padding: 10px 14px;
+            font-family: inherit;
+            font-size: 0.85rem;
+            margin-bottom: 15px;
+            outline: none;
+        }
+
+        .search-box:focus {
+            border-color: var(--accent);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+        }
+
+        th {
+            background: #08120a;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+
+        tr:nth-child(even) {
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        tr:hover {
+            background: rgba(0, 255, 102, 0.05);
+        }
+
+        .gpio-badge {
+            display: inline-block;
+            background: #000;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 2px 8px;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+
+        .code-block {
+            background: #000;
+            border: 1px solid var(--border);
+            padding: 15px;
+            margin-top: 30px;
+            position: relative;
+            font-size: 0.8rem;
+            color: var(--accent);
+            overflow-x: auto;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px; right: 10px;
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 4px 10px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .copy-btn:hover {
+            background: var(--accent);
+            color: #000;
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 20px; right: 20px;
+            background: #000;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 12px 20px;
+            font-size: 0.85rem;
+            box-shadow: 0 0 15px var(--accent-glow);
+            z-index: 1000;
+            display: none;
+        }
+
         footer {
-            margin-top: 80px;
+            margin-top: 70px;
             text-align: center;
             color: var(--text-dim);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             border-top: 1px solid var(--border);
-            padding-top: 20px;
+            padding-top: 25px;
         }
 
-        .cursor {
-            display: inline-block;
-            width: 10px;
-            height: 1.2rem;
-            background: var(--accent);
-            margin-left: 5px;
-            vertical-align: middle;
-            animation: blink 1s step-end infinite;
-        }
-
-        @keyframes blink {
-            50% { opacity: 0; }
+        @media (max-width: 850px) {
+            .nav-links { display: none; }
+            table { font-size: 0.75rem; }
+            th, td { padding: 6px 8px; }
         }
     </style>
 </head>
 <body>
 
+    <div class="scanline-overlay" id="scanlines"></div>
+
     <header>
         <div class="container nav">
-            <a href="index.html" class="logo">>_ ESP-Hunter <span class="cursor"></span></a>
-            <div>
-                <a href="https://github.com/ESRHunter/ESP-Hunter" class="btn btn-secondary" target="_blank">[GitHub]</a>
-                <a href="index.html" class="btn btn-secondary" style="margin-left:10px;">[На главную]</a>
+            <a href="index.html" class="logo">&gt;_ ESP-HUNTER</a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">Главная</a>
+                <a href="pinout.html" class="nav-link active">[ Pinout ]</a>
+                <a href="flasher.html" class="nav-link">[ Flasher ]</a>
+                <a href="dashboard.html" class="nav-link">[ Dashboard ]</a>
+                <a href="arcade.html" class="nav-link">[ Arcade ]</a>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <button class="filter-btn" id="toggle-scanlines" title="Вкл/Выкл CRT эффект">CRT FX</button>
+                <a href="https://github.com/ESRHunter/ESP-Hunter" class="btn btn-secondary" target="_blank">[ GitHub ]</a>
             </div>
         </div>
     </header>
 
     <main class="container">
-        <section class="hero">
-            <h1>РАСПИНОВКА <br><span>ESP-Hunter</span></h1>
-            <p>Полная схема подключения всех модулей к ESP32-S3. Нажмите на компоненты для увеличения.</p>
-            <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
-                <a href="index.html" class="btn btn-secondary">← Назад</a>
-            </div>
-        </section>
+        <div class="page-title">
+            <h1>Распиновка <span>ESP-Hunter</span></h1>
+            <p>Схема электрических подключений периферийных модулей к ESP32-S3 DevKitC.</p>
+        </div>
 
-        <section class="pinout-container">
-            <!-- Вставляем SVG-схему -->
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" style="background-color: #0a0a0a;">
+        <div class="filter-bar">
+            <button class="filter-btn active" data-filter="all">Все модули</button>
+            <button class="filter-btn" data-filter="tft">Дисплей ST7735</button>
+            <button class="filter-btn" data-filter="sd">MicroSD Карта</button>
+            <button class="filter-btn" data-filter="nfc">PN532 RFID</button>
+            <button class="filter-btn" data-filter="ir">ИК TX/RX</button>
+            <button class="filter-btn" data-filter="btn">Кнопки D-Pad</button>
+        </div>
+
+        <!-- SVG Схема -->
+        <div class="svg-container glass">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 680" style="background-color: #000;">
                 <defs>
                     <style>
-                        text { font-family: 'Courier New', Courier, monospace; fill: #00ff66; }
+                        text { font-family: 'Fira Code', 'Courier New', monospace; fill: #00ff66; }
                         .pin-label { fill: #00ff66; font-size: 11px; }
                         .module-title { fill: #00ff66; font-size: 14px; font-weight: bold; }
-                        .line { stroke: #00ff66; stroke-width: 2; fill: none; }
-                        .dashed { stroke-dasharray: 4,4; }
-                        .box { fill: #0c0c0c; stroke: #00ff66; stroke-width: 1.5; }
-                        .pin-dot { fill: #00ff66; }
+                        .line { stroke: #00ff66; stroke-width: 1.5; fill: none; }
+                        .box { fill: #0a120c; stroke: #183822; stroke-width: 1.5; transition: all 0.3s; }
+                        .box:hover { stroke: #00ff66; fill: #0d1a0f; }
+                        .esp-box { fill: #050d06; stroke: #00ff66; stroke-width: 2; }
                     </style>
                 </defs>
-                <text x="450" y="30" text-anchor="middle" font-size="22" font-weight="bold" fill="#00ff66">ESP-Hunter Pinout Diagram</text>
-                <rect x="320" y="250" width="260" height="150" rx="5" class="box" />
-                <text x="450" y="285" text-anchor="middle" class="module-title">ESP32-S3</text>
-                <text x="450" y="305" text-anchor="middle" fill="#808080" font-size="10">Dual-Core LX7</text>
-                <text x="330" y="340" class="pin-label">3.3V</text>
-                <text x="330" y="360" class="pin-label">GND</text>
-                <circle cx="315" cy="340" r="3" class="pin-dot" />
-                <circle cx="315" cy="360" r="3" class="pin-dot" />
-                <text x="565" y="340" class="pin-label">3.3V</text>
-                <text x="565" y="360" class="pin-label">GND</text>
-                <circle cx="585" cy="340" r="3" class="pin-dot" />
-                <circle cx="585" cy="360" r="3" class="pin-dot" />
-                <rect x="50" y="100" width="180" height="120" rx="5" class="box" />
-                <text x="140" y="130" text-anchor="middle" class="module-title">TFT ST7735</text>
-                <text x="140" y="150" text-anchor="middle" fill="#808080" font-size="10">128x128 SPI</text>
-                <text x="60" y="175" class="pin-label">SCK → 12</text>
-                <text x="60" y="195" class="pin-label">MOSI → 11</text>
-                <text x="60" y="215" class="pin-label">CS → 10</text>
-                <text x="60" y="235" class="pin-label">DC → 9</text>
-                <text x="60" y="255" class="pin-label">RST → 8</text>
-                <line x1="230" y1="175" x2="320" y2="175" class="line" />
-                <line x1="230" y1="195" x2="320" y2="195" class="line" />
-                <line x1="230" y1="215" x2="320" y2="215" class="line" />
-                <line x1="230" y1="235" x2="320" y2="235" class="line" />
-                <line x1="230" y1="255" x2="320" y2="255" class="line" />
-                <rect x="50" y="450" width="180" height="80" rx="5" class="box" />
-                <text x="140" y="475" text-anchor="middle" class="module-title">MicroSD</text>
-                <text x="140" y="495" text-anchor="middle" fill="#808080" font-size="10">SPI</text>
-                <text x="60" y="520" class="pin-label">CS → 15</text>
-                <line x1="230" y1="520" x2="320" y2="520" class="line" />
-                <rect x="640" y="100" width="180" height="100" rx="5" class="box" />
-                <text x="730" y="130" text-anchor="middle" class="module-title">PN532</text>
-                <text x="730" y="150" text-anchor="middle" fill="#808080" font-size="10">RFID I2C</text>
-                <text x="650" y="175" class="pin-label">SDA → 1</text>
-                <text x="650" y="195" class="pin-label">SCL → 2</text>
-                <line x1="640" y1="175" x2="580" y2="175" class="line" />
-                <line x1="640" y1="195" x2="580" y2="195" class="line" />
-                <rect x="640" y="300" width="180" height="140" rx="5" class="box" />
-                <text x="730" y="330" text-anchor="middle" class="module-title">CC1101</text>
-                <text x="730" y="350" text-anchor="middle" fill="#808080" font-size="10">Sub-GHz</text>
-                <text x="650" y="375" class="pin-label">CS → 14</text>
-                <text x="650" y="395" class="pin-label">GDO0 → 17</text>
-                <text x="650" y="415" class="pin-label">GDO2 → 21</text>
-                <text x="650" y="435" class="pin-label">SCK/MOSI/MISO</text>
-                <text x="650" y="455" class="pin-label">→ 12/11/13</text>
-                <line x1="640" y1="375" x2="580" y2="375" class="line" />
-                <line x1="640" y1="395" x2="580" y2="395" class="line" />
-                <line x1="640" y1="415" x2="580" y2="415" class="line" />
-                <line x1="640" y1="435" x2="580" y2="435" class="line" />
-                <rect x="640" y="500" width="180" height="80" rx="5" class="box" />
-                <text x="730" y="525" text-anchor="middle" class="module-title">IR TX/RX</text>
-                <text x="650" y="555" class="pin-label">TX → 7</text>
-                <text x="650" y="575" class="pin-label">RX → 18</text>
-                <line x1="640" y1="555" x2="580" y2="555" class="line" />
-                <line x1="640" y1="575" x2="580" y2="575" class="line" />
-                <rect x="50" y="600" width="180" height="100" rx="5" class="box" />
-                <text x="140" y="625" text-anchor="middle" class="module-title">D-Pad Buttons</text>
-                <text x="60" y="655" class="pin-label">UP → 4</text>
-                <text x="60" y="675" class="pin-label">DOWN → 5</text>
-                <text x="60" y="695" class="pin-label">OK → 3</text>
-                <text x="60" y="715" class="pin-label">ESC → 6</text>
-                <line x1="230" y1="655" x2="320" y2="655" class="line" />
-                <line x1="230" y1="675" x2="320" y2="675" class="line" />
-                <line x1="230" y1="695" x2="320" y2="695" class="line" />
-                <line x1="230" y1="715" x2="320" y2="715" class="line" />
-                <text x="450" y="620" text-anchor="middle" fill="#808080" font-size="10">Общие шины: 3.3V, GND, SPI (SCK/MOSI/MISO)</text>
-                <text x="450" y="640" text-anchor="middle" fill="#808080" font-size="10">Все пины INPUT_PULLUP для кнопок</text>
-                <rect x="50" y="720" width="800" height="40" rx="3" fill="#0c0c0c" stroke="#333" />
-                <text x="70" y="745" fill="#00ff66" font-size="11">⚡ Все подключения проверять на соответствие реальной сборке. Лицензия MIT.</text>
+
+                <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#00ff66">&gt;_ ESP32-S3 DevKitC Pinout Diagram</text>
+
+                <!-- ESP32-S3 Центральный блок -->
+                <rect x="360" y="90" width="180" height="370" rx="6" class="esp-box" />
+                <rect x="400" y="55" width="100" height="35" rx="4" class="box" />
+                <text x="450" y="115" text-anchor="middle" class="module-title">ESP32-S3</text>
+                <text x="450" y="135" text-anchor="middle" fill="#7aa387" font-size="10">Dual-Core LX7</text>
+
+                <!-- TFT ST7735 -->
+                <g class="mod-group" data-mod="tft">
+                    <rect x="50" y="90" width="180" height="180" rx="5" class="box" />
+                    <text x="140" y="120" text-anchor="middle" class="module-title">TFT ST7735</text>
+                    <text x="140" y="140" text-anchor="middle" fill="#7aa387" font-size="10">128x128 SPI</text>
+                    <text x="60" y="165" class="pin-label">SCK  → GPIO 12</text>
+                    <text x="60" y="185" class="pin-label">MOSI → GPIO 11</text>
+                    <text x="60" y="205" class="pin-label">CS   → GPIO 10</text>
+                    <text x="60" y="225" class="pin-label">DC   → GPIO 9</text>
+                    <text x="60" y="245" class="pin-label">RST  → GPIO 8</text>
+                    <line x1="230" y1="165" x2="360" y2="165" class="line" />
+                    <line x1="230" y1="185" x2="360" y2="185" class="line" />
+                    <line x1="230" y1="205" x2="360" y2="205" class="line" />
+                    <line x1="230" y1="225" x2="360" y2="225" class="line" />
+                    <line x1="230" y1="245" x2="360" y2="245" class="line" />
+                </g>
+
+                <!-- MicroSD -->
+                <g class="mod-group" data-mod="sd">
+                    <rect x="50" y="310" width="180" height="150" rx="5" class="box" />
+                    <text x="140" y="335" text-anchor="middle" class="module-title">MicroSD Slot</text>
+                    <text x="140" y="355" text-anchor="middle" fill="#7aa387" font-size="10">Shared SPI</text>
+                    <text x="60" y="380" class="pin-label">CS   → GPIO 15</text>
+                    <text x="60" y="400" class="pin-label">SCK  → GPIO 12</text>
+                    <text x="60" y="420" class="pin-label">MOSI → GPIO 11</text>
+                    <text x="60" y="440" class="pin-label">MISO → GPIO 13</text>
+                    <line x1="230" y1="380" x2="360" y2="380" class="line" />
+                    <line x1="230" y1="400" x2="360" y2="400" class="line" />
+                    <line x1="230" y1="420" x2="360" y2="420" class="line" />
+                    <line x1="230" y1="440" x2="360" y2="440" class="line" />
+                </g>
+
+                <!-- PN532 RFID -->
+                <g class="mod-group" data-mod="nfc">
+                    <rect x="670" y="90" width="180" height="110" rx="5" class="box" />
+                    <text x="760" y="118" text-anchor="middle" class="module-title">PN532 RFID</text>
+                    <text x="760" y="138" text-anchor="middle" fill="#7aa387" font-size="10">I2C Bus</text>
+                    <text x="680" y="163" class="pin-label">SDA → GPIO 1</text>
+                    <text x="680" y="183" class="pin-label">SCL → GPIO 2</text>
+                    <line x1="670" y1="163" x2="540" y2="163" class="line" />
+                    <line x1="670" y1="183" x2="540" y2="183" class="line" />
+                </g>
+
+                <!-- IR TX/RX -->
+                <g class="mod-group" data-mod="ir">
+                    <rect x="670" y="230" width="180" height="100" rx="5" class="box" />
+                    <text x="760" y="258" text-anchor="middle" class="module-title">IR Module</text>
+                    <text x="760" y="278" text-anchor="middle" fill="#7aa387" font-size="10">38kHz TX/RX</text>
+                    <text x="680" y="303" class="pin-label">TX → GPIO 7</text>
+                    <text x="680" y="323" class="pin-label">RX → GPIO 18</text>
+                    <line x1="670" y1="303" x2="540" y2="303" class="line" />
+                    <line x1="670" y1="323" x2="540" y2="323" class="line" />
+                </g>
+
+                <!-- D-Pad Buttons -->
+                <g class="mod-group" data-mod="btn">
+                    <rect x="50" y="490" width="180" height="130" rx="5" class="box" />
+                    <text x="140" y="515" text-anchor="middle" class="module-title">D-Pad Buttons</text>
+                    <text x="60" y="540" class="pin-label">UP   → GPIO 4</text>
+                    <text x="60" y="560" class="pin-label">DOWN → GPIO 5</text>
+                    <text x="60" y="580" class="pin-label">OK   → GPIO 3</text>
+                    <text x="60" y="600" class="pin-label">ESC  → GPIO 6</text>
+                    <line x1="230" y1="540" x2="360" y2="540" class="line" />
+                    <line x1="230" y1="560" x2="360" y2="560" class="line" />
+                    <line x1="230" y1="580" x2="360" y2="580" class="line" />
+                    <line x1="230" y1="600" x2="360" y2="600" class="line" />
+                </g>
+
+                <!-- Примечания -->
+                <rect x="270" y="500" width="580" height="120" rx="5" class="box" />
+                <text x="290" y="525" class="module-title">⚡ Информационный блок</text>
+                <text x="290" y="550" fill="#7aa387" font-size="11">• Общая шина SPI: SCK (GPIO 12), MOSI (GPIO 11) разделяется между TFT и SD.</text>
+                <text x="290" y="570" fill="#7aa387" font-size="11">• Кнопки D-Pad работают с внутренними подтягивающими резисторами (INPUT_PULLUP).</text>
+                <text x="290" y="590" fill="#7aa387" font-size="11">• Питание всех периферийных модулей строго 3.3V.</text>
             </svg>
-        </section>
+        </div>
+
+        <!-- Поиск и Таблица -->
+        <div class="table-section">
+            <h2>Таблица Подключений GPIO</h2>
+            <input type="text" class="search-box" id="table-search" placeholder="Поиск по пину, модулю или функции (например, GPIO12, SPI, TFT)...">
+
+            <div style="overflow-x: auto;">
+                <table id="pinout-table">
+                    <thead>
+                        <tr>
+                            <th>Модуль</th>
+                            <th>Пин Модуля</th>
+                            <th>Пин ESP32-S3</th>
+                            <th>Режим / Протокол</th>
+                            <th>Описание</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>SCK / CLK</td>
+                            <td><span class="gpio-badge">GPIO 12</span></td>
+                            <td>SPI Clock</td>
+                            <td>Тактовая линия общего SPI</td>
+                        </tr>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>MOSI / SDA</td>
+                            <td><span class="gpio-badge">GPIO 11</span></td>
+                            <td>SPI Master Out</td>
+                            <td>Передача данных экранного буфера</td>
+                        </tr>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>CS</td>
+                            <td><span class="gpio-badge">GPIO 10</span></td>
+                            <td>Output</td>
+                            <td>Выбор чипа дисплея</td>
+                        </tr>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>DC / A0</td>
+                            <td><span class="gpio-badge">GPIO 9</span></td>
+                            <td>Output</td>
+                            <td>Переключение Данные/Команда</td>
+                        </tr>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>RST</td>
+                            <td><span class="gpio-badge">GPIO 8</span></td>
+                            <td>Output</td>
+                            <td>Линия аппаратного сброса</td>
+                        </tr>
+                        <tr data-mod="sd">
+                            <td>MicroSD Slot</td>
+                            <td>CS</td>
+                            <td><span class="gpio-badge">GPIO 15</span></td>
+                            <td>Output</td>
+                            <td>Выбор чипа SD-карты</td>
+                        </tr>
+                        <tr data-mod="sd">
+                            <td>MicroSD Slot</td>
+                            <td>SCK</td>
+                            <td><span class="gpio-badge">GPIO 12</span></td>
+                            <td>SPI Clock</td>
+                            <td>Общая тактовая линия SPI</td>
+                        </tr>
+                        <tr data-mod="sd">
+                            <td>MicroSD Slot</td>
+                            <td>MOSI</td>
+                            <td><span class="gpio-badge">GPIO 11</span></td>
+                            <td>SPI MOSI</td>
+                            <td>Запись секторов FAT32</td>
+                        </tr>
+                        <tr data-mod="sd">
+                            <td>MicroSD Slot</td>
+                            <td>MISO</td>
+                            <td><span class="gpio-badge">GPIO 13</span></td>
+                            <td>SPI MISO</td>
+                            <td>Чтение данных с карты</td>
+                        </tr>
+                        <tr data-mod="nfc">
+                            <td>PN532 RFID</td>
+                            <td>SDA</td>
+                            <td><span class="gpio-badge">GPIO 1</span></td>
+                            <td>I2C SDA</td>
+                            <td>Шина данных RFID</td>
+                        </tr>
+                        <tr data-mod="nfc">
+                            <td>PN532 RFID</td>
+                            <td>SCL</td>
+                            <td><span class="gpio-badge">GPIO 2</span></td>
+                            <td>I2C SCL</td>
+                            <td>Тактовая шина RFID</td>
+                        </tr>
+                        <tr data-mod="ir">
+                            <td>IR Transmitter</td>
+                            <td>DATA</td>
+                            <td><span class="gpio-badge">GPIO 7</span></td>
+                            <td>PWM Output</td>
+                            <td>Передатчик ИК-команд (38kHz)</td>
+                        </tr>
+                        <tr data-mod="ir">
+                            <td>IR Receiver</td>
+                            <td>DATA</td>
+                            <td><span class="gpio-badge">GPIO 18</span></td>
+                            <td>Input</td>
+                            <td>Приёмник ИК-сигналов (TSOP)</td>
+                        </tr>
+                        <tr data-mod="btn">
+                            <td>D-Pad Buttons</td>
+                            <td>Button UP</td>
+                            <td><span class="gpio-badge">GPIO 4</span></td>
+                            <td>INPUT_PULLUP</td>
+                            <td>Кнопка Вверх (на GND)</td>
+                        </tr>
+                        <tr data-mod="btn">
+                            <td>D-Pad Buttons</td>
+                            <td>Button DOWN</td>
+                            <td><span class="gpio-badge">GPIO 5</span></td>
+                            <td>INPUT_PULLUP</td>
+                            <td>Кнопка Вниз (на GND)</td>
+                        </tr>
+                        <tr data-mod="btn">
+                            <td>D-Pad Buttons</td>
+                            <td>Button OK</td>
+                            <td><span class="gpio-badge">GPIO 3</span></td>
+                            <td>INPUT_PULLUP</td>
+                            <td>Кнопка Выбор (на GND)</td>
+                        </tr>
+                        <tr data-mod="btn">
+                            <td>D-Pad Buttons</td>
+                            <td>Button ESC</td>
+                            <td><span class="gpio-badge">GPIO 6</span></td>
+                            <td>INPUT_PULLUP</td>
+                            <td>Кнопка Назад (на GND)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Код инициализации пинов -->
+        <div class="code-block">
+            <button class="copy-btn" onclick="copyPinsCode()">Скопировать Defines</button>
+            <pre id="pins-cpp-code">
+// Инициализация пинов ESP32-S3 в проекте ESP-Hunter
+#define TFT_SCLK    12
+#define TFT_MOSI    11
+#define SD_MISO     13
+#define TFT_CS      10
+#define TFT_DC       9
+#define TFT_RST      8
+#define SD_CS       15
+
+#define BTN_UP       4
+#define BTN_DOWN     5
+#define BTN_OK       3
+#define BTN_ESC      6
+
+#define PN532_SDA    1
+#define PN532_SCL    2
+
+#define IR_TX_PIN    7
+#define IR_RX_PIN   18
+            </pre>
+        </div>
     </main>
+
+    <div id="toast">Уведомление</div>
 
     <footer>
         <div class="container">
-            <p>&copy; 2026 ESP-Hunter Project. Лицензия MIT. <br><span style="color:var(--accent);">>_ System ready.</span></p>
+            <p>&copy; 2026 ESP-Hunter Project. Распространяется под лицензией MIT.</p>
+            <p style="color:var(--accent); margin-top:5px;">&gt;_ System ready.</p>
         </div>
     </footer>
 
+    <script>
+        const scanlines = document.getElementById('scanlines');
+        const toast = document.getElementById('toast');
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        const tableRows = document.querySelectorAll('#pinout-table tbody tr');
+        const searchInput = document.getElementById('table-search');
+
+        function showToast(msg) {
+            toast.innerText = msg;
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 2500);
+        }
+
+        // CRT Эффект
+        document.getElementById('toggle-scanlines').addEventListener('click', function() {
+            scanlines.classList.toggle('disabled');
+            showToast(scanlines.classList.contains('disabled') ? 'CRT Эффект отключен' : 'CRT Эффект включен');
+        });
+
+        // Фильтрация модулей
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                filterBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                const filter = btn.getAttribute('data-filter');
+                
+                tableRows.forEach(row => {
+                    if (filter === 'all' || row.getAttribute('data-mod') === filter) {
+                        row.style.display = '';
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
+            });
+        });
+
+        // Живой поиск по таблице
+        searchInput.addEventListener('input', function() {
+            const query = this.value.toLowerCase().trim();
+
+            tableRows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                if (text.includes(query)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+
+        // Копирование кода
+        function copyPinsCode() {
+            const codeText = document.getElementById('pins-cpp-code').innerText;
+            navigator.clipboard.writeText(codeText).then(() => {
+                showToast('Дефайны пинов скопированы!');
+            });
+        }
+    </script>
 </body>
 </html>
