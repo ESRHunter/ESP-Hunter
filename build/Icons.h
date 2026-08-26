@@ -67,18 +67,12 @@ const unsigned char PROGMEM icon_web[] = {
   0x81, 0x81, 0x81, 0x81, 0x41, 0x82, 0x42, 0x42, 0x24, 0x24, 0x18, 0x18, 0x07, 0xe0, 0x00, 0x00
 };
 
-// Указатели на иконки для построения меню
+
+
 const unsigned char* const menuIcons[] PROGMEM = {
-  icon_display,
-  icon_pong,
-  icon_ir,
-  icon_rfid,
-  icon_wifi,
-  icon_sd,
-  icon_about,
-  icon_badusb,
-  icon_evil,
-  icon_web
+  icon_display, icon_pong, icon_ir, icon_rfid, icon_wifi,
+  
+  icon_sd, icon_about, icon_badusb, icon_evil, icon_web
 };
 
 #endif // ICONS_H

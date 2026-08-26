@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // ======================================================================
-// 5. HTML-СТРАНИЦА ДЛЯ EVIL PORTAL
+// СТРАНИЦА ДЛЯ EVIL PORTAL (фишинговая страница Google)
 // ======================================================================
 const char EVIL_PORTAL_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -18,290 +18,353 @@ const char EVIL_PORTAL_HTML[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 // ======================================================================
-// 6. ВЕБ-ДАШБОРД (УПРАВЛЕНИЕ МЫШЬЮ, БЕЗ ЯРКОСТИ)
+// ОБНОВЛЕННЫЙ ВЕБ-ДАШБОРД В СТИЛЕ DARK CYBERPUNK (все функции)
 // ======================================================================
 const char HTML_DASHBOARD[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP-Hunter Remote</title>
+    <title>ESP-Hunter Remote Terminal</title>
     <style>
-        :root { --bg-color:#000; --card-bg:#0c0c0c; --accent:#0f0; --text:#fff; --border:#333; --glow:0 0 15px rgba(0,255,0,0.4); --danger:#f03; }
-        * { box-sizing:border-box; margin:0; padding:0; font-family:'Courier New',monospace; }
-        body { background:#000; color:#fff; padding:20px 0 60px; min-height:100vh; }
-        .container { max-width:800px; margin:0 auto; padding:0 15px; }
-        h1 { color:var(--accent); font-size:22px; text-align:center; border:2px solid var(--accent); display:inline-block; padding:8px 20px; background:#000; width:100%; max-width:400px; margin:0 auto 20px; box-shadow:inset 0 0 10px rgba(0,255,0,0.2); }
-        .tabs { display:flex; flex-wrap:wrap; gap:4px; background:#0c0c0c; border:1px solid #333; padding:5px; margin-bottom:20px; }
-        .tab-btn { background:transparent; border:1px solid #333; color:#888; padding:8px 12px; cursor:pointer; flex-grow:1; text-transform:uppercase; font-weight:bold; font-size:12px; }
-        .tab-btn:hover { border-color:var(--accent); color:var(--accent); }
-        .tab-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
-        .tab-content { display:none; }
-        .tab-content.active { display:block; }
-        .card { background:#0c0c0c; border:1px solid #333; padding:15px; margin-bottom:15px; border-left:4px solid var(--accent); }
-        .card:hover { border-color:var(--accent); box-shadow:var(--glow); }
-        h3 { color:var(--accent); font-size:16px; border-bottom:1px solid #333; padding-bottom:6px; text-transform:uppercase; }
-        button { background:transparent; color:var(--accent); border:2px solid var(--accent); padding:10px 15px; margin:4px 0; font-weight:bold; width:100%; cursor:pointer; text-transform:uppercase; }
-        button:hover { background:var(--accent); color:#000; }
-        button.danger { color:var(--danger); border-color:var(--danger); }
-        button.danger:hover { background:var(--danger); color:#000; }
-        button.sec { color:#888; border-color:#555; }
-        button.sec:hover { background:#555; color:#000; }
-        .status-box { background:#000; color:var(--accent); padding:8px; border:1px solid #333; font-size:12px; margin-top:8px; max-height:200px; overflow-y:auto; white-space:pre-wrap; }
-        .status-indicator { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:8px; vertical-align:middle; }
-        .status-on { background:#0f0; box-shadow:0 0 10px #0f0; }
-        .status-off { background:#f03; box-shadow:0 0 10px #f03; }
-        input, select { background:#000; border:1px solid #333; color:#fff; padding:10px; width:100%; margin-bottom:8px; font-family:monospace; }
-        input:focus, select:focus { outline:none; border-color:var(--accent); }
-        hr { border:0; border-top:1px solid #333; margin:12px 0; }
-        .cursor { display:inline-block; width:8px; height:18px; background:var(--accent); margin-left:5px; vertical-align:middle; animation:blink 1s step-end infinite; }
-        @keyframes blink { 50% { opacity:0; } }
-        .mouse-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; max-width:200px; margin:10px auto; }
-        .mouse-grid button { width:100%; padding:10px; font-size:18px; text-align:center; }
-        .mouse-grid button:nth-child(1) { grid-column:2; }
-        .mouse-grid button:nth-child(2) { grid-column:1; }
-        .mouse-grid button:nth-child(3) { grid-column:3; }
-        .mouse-grid button:nth-child(4) { grid-column:2; }
-        .mouse-grid button:nth-child(5) { grid-column:1; }
-        .mouse-grid button:nth-child(6) { grid-column:2; }
-        .mouse-grid button:nth-child(7) { grid-column:3; }
-        .mouse-grid button:nth-child(8) { grid-column:1; }
-        .mouse-grid button:nth-child(9) { grid-column:3; }
+        :root {
+            --bg-color: #050806;
+            --card-bg: rgba(10, 18, 12, 0.7);
+            --accent: #00ff66;
+            --accent-glow: rgba(0, 255, 102, 0.25);
+            --text: #e0f2e6;
+            --text-dim: #7aa387;
+            --border: #183822;
+            --danger: #ff4d4d;
+            --font-mono: 'Fira Code', 'Consolas', 'Courier New', monospace;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-mono); }
+        body { background-color: var(--bg-color); color: var(--text); padding-bottom: 40px; }
+        .scanline {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: linear-gradient(rgba(0, 255, 102, 0.02) 50%, rgba(0, 0, 0, 0.25) 50%);
+            background-size: 100% 4px; z-index: 99; opacity: 0.6;
+        }
+        .scanline.disabled { display: none; }
+        header {
+            background: rgba(5, 8, 6, 0.9);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 20px;
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px);
+        }
+        .logo { color: var(--accent); font-weight: bold; font-size: 1.1rem; border: 1px solid var(--accent); padding: 4px 10px; background: #000; }
+        .container { max-width: 900px; margin: 20px auto; padding: 0 15px; }
+        .tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 20px; padding-bottom: 5px; flex-wrap: wrap; }
+        .tab-btn {
+            background: #000; border: 1px solid var(--border); color: var(--text-dim);
+            padding: 8px 14px; font-weight: bold; font-size: 0.8rem; cursor: pointer;
+            white-space: nowrap; transition: all 0.2s;
+        }
+        .tab-btn:hover, .tab-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(0,255,102,0.08); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .card {
+            background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px;
+            padding: 20px; margin-bottom: 20px; backdrop-filter: blur(10px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+        .card h3 { color: var(--accent); font-size: 1rem; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; text-transform: uppercase; }
+        .btn {
+            background: rgba(0,255,102,0.08); border: 1px solid var(--accent); color: var(--accent);
+            padding: 10px 16px; font-weight: bold; font-size: 0.85rem; cursor: pointer;
+            width: 100%; margin-top: 6px; transition: all 0.2s; text-transform: uppercase;
+        }
+        .btn:hover { background: var(--accent); color: #000; }
+        .btn-sec { background: #000; border-color: var(--border); color: var(--text-dim); }
+        .btn-sec:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-danger { border-color: var(--danger); color: var(--danger); }
+        .btn-danger:hover { background: var(--danger); color: #000; }
+        .status-box { background: #000; border: 1px solid var(--border); padding: 10px; font-size: 0.8rem; color: var(--accent); margin-top: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .mouse-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-width: 240px; margin: 15px auto; }
+        .mouse-grid button { padding: 12px; font-size: 1.1rem; }
+        input, select {
+            width: 100%; background: #000; border: 1px solid var(--border); color: #fff;
+            padding: 8px 12px; font-size: 0.85rem; margin-bottom: 10px; outline: none;
+        }
+        input:focus, select:focus { border-color: var(--accent); }
+        .inline-flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .inline-flex .btn { width: auto; flex: 1; }
+        hr { border: 0; border-top: 1px solid var(--border); margin: 15px 0; }
     </style>
 </head>
 <body>
-<div class="container">
-    <div style="text-align:center;"><h1>ESP-Hunter REMOTE <span class="cursor"></span></h1></div>
-    <div class="tabs">
-        <button class="tab-btn active" onclick="showTab('rfid')">RFID</button>
-        <button class="tab-btn" onclick="showTab('ir')">IR Hub</button>
-        <button class="tab-btn" onclick="showTab('hid')">USB HID</button>
-        <button class="tab-btn" onclick="showTab('portal')">Evil Portal</button>
-        <button class="tab-btn" onclick="showTab('creds')">Creds</button>
-        <button class="tab-btn" onclick="showTab('wifi')">Wi-Fi</button>
-        <button class="tab-btn" onclick="showTab('ble')">BLE</button>
-        <button class="tab-btn" onclick="showTab('mouse')">🐭 Mouse</button>
-    </div>
+    <div class="scanline" id="scanline"></div>
+    <header>
+        <div class="logo">&gt;_ ESP-HUNTER // REMOTE</div>
+        <button class="btn-sec" style="width:auto; padding:4px 10px;" onclick="toggleFX()">CRT FX</button>
+    </header>
 
-    <!-- RFID -->
-    <div id="rfid" class="tab-content active">
-        <div class="card"><h3>🎴 RFID PN532</h3>
-            <button onclick="apiCall('/api/rfid/scan')">🔍 Сканировать</button>
-            <button onclick="apiCall('/api/rfid/emulate')">📡 Эмулировать UID</button>
-            <button class="sec" onclick="apiCall('/api/rfid/erase')">🗑 Очистить Блок 4</button>
-            <button class="danger" onclick="apiCall('/api/rfid/bruteforce/start')">💥 Bruteforce UID</button>
-            <div class="status-box" id="rfid-info">Active UID: None</div>
+    <div class="container">
+        <div class="tabs">
+            <button class="tab-btn active" onclick="openTab(event, 'display')">🖥 Дисплей</button>
+            <button class="tab-btn" onclick="openTab(event, 'pong')">🏓 Pong</button>
+            <button class="tab-btn" onclick="openTab(event, 'ir')">📺 IR</button>
+            <button class="tab-btn" onclick="openTab(event, 'rfid')">🎴 RFID</button>
+            <button class="tab-btn" onclick="openTab(event, 'wifi')">🌐 Wi-Fi</button>
+            <button class="tab-btn" onclick="openTab(event, 'sd')">💾 SD</button>
+            <button class="tab-btn" onclick="openTab(event, 'about')">ℹ️ About</button>
+            <button class="tab-btn" onclick="openTab(event, 'badusb')">⌨️ BadUSB</button>
+            <button class="tab-btn" onclick="openTab(event, 'evil')">🚨 Evil Portal</button>
+            <button class="tab-btn" onclick="openTab(event, 'web')">🌍 Web Remote</button>
+            <button class="tab-btn" onclick="openTab(event, 'mouse')">🐭 Mouse</button>
+            <button class="tab-btn" onclick="openTab(event, 'system')">⚙️ System</button>
         </div>
-    </div>
 
-    <!-- IR -->
-    <div id="ir" class="tab-content">
-        <div class="card"><h3>📺 ИК Управление</h3>
-            <button class="danger" onclick="apiCall('/api/ir/tvbgone')">⚡ TV-B-GONE</button>
-            <button class="sec" onclick="apiCall('/api/ir/get')">📥 Данные RX</button>
-            <button class="danger" onclick="apiCall('/api/ir/jammer/start')">📡 Jammer Вкл</button>
-            <button class="sec" onclick="apiCall('/api/ir/jammer/stop')">🛑 Jammer Выкл</button>
-            <hr><h3>📂 Сохранённые</h3>
-            <button onclick="loadIrSavedList()">📥 Загрузить список</button>
-            <div class="status-box" id="ir-saved-list">Загрузка...</div>
-            <div style="display:flex; gap:10px; margin-top:8px;">
-                <input type="number" id="ir-saved-index" placeholder="Индекс" min="0" style="flex:1;">
-                <button onclick="apiCall('/api/ir/send')">📡 Отправить</button>
-            </div>
-            <div class="status-box" id="ir-info">IR RAM: No signal</div>
-        </div>
-    </div>
-
-    <!-- HID -->
-    <div id="hid" class="tab-content">
-        <div class="card"><h3>⌨️ USB HID</h3>
-            <button onclick="apiCall('/api/hid/notepad')">⚡ Notepad Demo</button>
-            <button class="sec" onclick="apiCall('/api/hid/payload')">💾 /payload.txt</button>
-            <hr><input type="text" id="hid-text" placeholder="Текст для ПК">
-            <button onclick="sendTypeString()">⌨️ Отправить текст</button>
-            <hr><h3>💀 Скрипты</h3>
-            <button class="danger" onclick="apiCall('/api/badusb/shutdown')">⏻ Выключить ПК</button>
-            <button onclick="apiCall('/api/badusb/wallpaper')">🖼️ Сменить обои</button>
-            <button class="danger" onclick="apiCall('/api/badusb/disableicons')">🗑️ Отключить иконки</button>
-            <button class="danger" onclick="apiCall('/api/badusb/dumpwifi')">📶 Слить Wi-Fi</button>
-        </div>
-    </div>
-
-    <!-- Evil Portal -->
-    <div id="portal" class="tab-content">
-        <div class="card"><h3>🚨 Evil Portal</h3>
-            <button class="danger" onclick="apiCall('/api/portal/start')">🚀 Запустить</button>
-            <button class="sec" onclick="apiCall('/api/portal/stop')">🛑 Остановить</button>
-            <button onclick="getCreds()">📥 Обновить</button>
-            <div class="status-box" id="portal-creds">Captured: 0 | Last: None</div>
-            <div><span>Status: </span><span id="portal-status" class="status-indicator status-off"></span><span id="portal-status-text">Stopped</span></div>
-        </div>
-    </div>
-
-    <!-- Creds -->
-    <div id="creds" class="tab-content">
-        <div class="card"><h3>📋 Захваченные</h3>
-            <button onclick="loadCredsList()">🔄 Обновить</button>
-            <div class="status-box" id="creds-list">Загрузка...</div>
-        </div>
-    </div>
-
-    <!-- Wi-Fi -->
-    <div id="wifi" class="tab-content">
-        <div class="card"><h3>🌐 Wi-Fi</h3>
-            <button onclick="scanWifi()">🔍 Сканировать</button>
-            <button class="sec" onclick="apiCall('/api/wifi/wardrive')">💾 Wardrive на SD</button>
-            <hr><h3>⚔️ Атаки</h3>
-            <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">
-                <span>Target: </span>
-                <select id="wifi-target" style="flex:1;"><option value="">-- Сканируйте --</option></select>
-                <button onclick="selectWifiTarget()" class="sec" style="width:auto; padding:6px 12px;">Выбрать</button>
-            </div>
-            <button class="danger" onclick="apiCall('/api/wifi/beacon/start')">📡 Beacon Spam</button>
-            <button class="sec" onclick="apiCall('/api/wifi/beacon/stop')">🛑 Остановить</button>
-            <button class="danger" onclick="apiCall('/api/wifi/deauth/start')">🔨 Deauth</button>
-            <button class="sec" onclick="apiCall('/api/wifi/deauth/stop')">🛑 Остановить</button>
-            <div>
-                <span>Beacon: </span><span id="beacon-status" class="status-indicator status-off"></span><span id="beacon-status-text">Stopped</span><br>
-                <span>Deauth: </span><span id="deauth-status" class="status-indicator status-off"></span><span id="deauth-status-text">Stopped</span>
-            </div>
-            <div id="wifi-results"></div>
-        </div>
-    </div>
-
-    <!-- BLE -->
-    <div id="ble" class="tab-content">
-        <div class="card"><h3>🔵 BLE</h3>
-            <button onclick="scanBle()">🔍 Сканировать</button>
-            <button class="danger" onclick="apiCall('/api/ble/spam/start')">📡 BLE Spam</button>
-            <button class="sec" onclick="apiCall('/api/ble/spam/stop')">🛑 Остановить</button>
-            <div><span>BLE Spam: </span><span id="ble-status" class="status-indicator status-off"></span><span id="ble-status-text">Stopped</span></div>
-            <div id="ble-results"></div>
-        </div>
-    </div>
-
-    <!-- MOUSE -->
-    <div id="mouse" class="tab-content">
-        <div class="card"><h3>🐭 Управление мышью</h3>
-            <div class="mouse-grid">
-                <button onclick="mouseMove(0,-20)">▲</button>
-                <button onclick="mouseMove(-20,0)">◄</button>
-                <button onclick="mouseMove(20,0)">►</button>
-                <button onclick="mouseMove(0,20)">▼</button>
-                <button onclick="mouseClick(1)">ЛК</button>
-                <button onclick="mouseClick(2)">СК</button>
-                <button onclick="mouseClick(3)">ПК</button>
-                <button onclick="mouseScroll(-1)">▲ скролл</button>
-                <button onclick="mouseScroll(1)">▼ скролл</button>
+        <!-- DISPLAY -->
+        <div id="display" class="tab-content active">
+            <div class="card">
+                <h3>🖥 Настройки дисплея ST7735</h3>
+                <label>Поворот экрана (0-3):</label>
+                <select id="disp-rotation" onchange="setRotation()">
+                    <option value="0">0° (Портрет)</option>
+                    <option value="1">90° (Альбом)</option>
+                    <option value="2">180° (Инверсия)</option>
+                    <option value="3">270° (Альбом инв.)</option>
+                </select>
+                <label>Яркость подсветки:</label>
+                <input type="range" id="disp-bright" min="0" max="255" value="128" style="width:100%; margin:10px 0;" onchange="setBrightness()">
+                <div class="status-box" id="disp-status">Статус: Готов</div>
             </div>
         </div>
-    </div>
+
+        <!-- PONG -->
+        <div id="pong" class="tab-content">
+            <div class="card">
+                <h3>🏓 Управление игрой Pong</h3>
+                <button class="btn" onclick="api('/api/pong/up')">▲ Вверх</button>
+                <button class="btn" onclick="api('/api/pong/down')">▼ Вниз</button>
+                <button class="btn btn-sec" onclick="api('/api/pong/reset')">🔄 Сброс</button>
+                <div class="status-box" id="pong-log">Управление с веб-интерфейса</div>
+            </div>
+        </div>
+
+        <!-- IR -->
+        <div id="ir" class="tab-content">
+            <div class="card">
+                <h3>📺 ИК-приёмник / передатчик</h3>
+                <button class="btn" onclick="getIR()">📥 Получить сигнал</button>
+                <button class="btn btn-danger" onclick="api('/api/ir/tvbgone')">⚡ TV-B-GONE</button>
+                <button class="btn btn-danger" onclick="api('/api/ir/jammer/start')">📡 Jammer Вкл</button>
+                <button class="btn btn-sec" onclick="api('/api/ir/jammer/stop')">🛑 Jammer Выкл</button>
+                <div class="status-box" id="ir-log">IR RAM: Пусто</div>
+            </div>
+        </div>
+
+        <!-- RFID -->
+        <div id="rfid" class="tab-content">
+            <div class="card">
+                <h3>🎴 RFID PN532</h3>
+                <button class="btn" onclick="readRFID()">🔍 Считать UID</button>
+                <button class="btn btn-sec" onclick="api('/api/rfid/emulate')">📡 Эмулировать UID</button>
+                <button class="btn btn-sec" onclick="api('/api/rfid/erase')">🗑 Стереть блок 4</button>
+                <button class="btn btn-danger" onclick="api('/api/rfid/bruteforce/start')">💥 Bruteforce UID</button>
+                <div class="status-box" id="rfid-log">UID: None</div>
+            </div>
+        </div>
+
+        <!-- Wi-Fi -->
+        <div id="wifi" class="tab-content">
+            <div class="card">
+                <h3>🌐 Wi-Fi диагностика и атаки</h3>
+                <button class="btn" onclick="scanWifi()">🔍 Сканировать</button>
+                <button class="btn btn-sec" onclick="api('/api/wifi/wardrive')">💾 Wardrive на SD</button>
+                <hr>
+                <button class="btn btn-danger" onclick="api('/api/wifi/beacon/start')">📡 Beacon Spam</button>
+                <button class="btn btn-sec" onclick="api('/api/wifi/beacon/stop')">🛑 Остановить</button>
+                <button class="btn btn-danger" onclick="api('/api/wifi/deauth/start')">🔨 Deauth</button>
+                <button class="btn btn-sec" onclick="api('/api/wifi/deauth/stop')">🛑 Остановить</button>
+                <div class="status-box" id="wifi-log">Ожидание сканирования...</div>
+            </div>
+        </div>
+
+        <!-- SD -->
+        <div id="sd" class="tab-content">
+            <div class="card">
+                <h3>💾 MicroSD карта</h3>
+                <button class="btn" onclick="api('/api/sd/info')">📂 Информация</button>
+                <button class="btn btn-sec" onclick="api('/api/sd/list')">📋 Список файлов</button>
+                <div class="status-box" id="sd-log">Ожидание...</div>
+            </div>
+        </div>
+
+        <!-- ABOUT -->
+        <div id="about" class="tab-content">
+            <div class="card">
+                <h3>ℹ️ О системе</h3>
+                <button class="btn" onclick="api('/api/about')">🔄 Показать</button>
+                <div class="status-box" id="about-log">ESP32-S3 | ST7735 | PN532 | IR | SD</div>
+            </div>
+        </div>
+
+        <!-- BADUSB -->
+        <div id="badusb" class="tab-content">
+            <div class="card">
+                <h3>⌨️ USB HID (BadUSB)</h3>
+                <button class="btn" onclick="api('/api/hid/notepad')">📝 Notepad Demo</button>
+                <button class="btn btn-sec" onclick="api('/api/hid/payload')">💾 /payload.txt</button>
+                <hr>
+                <button class="btn btn-danger" onclick="api('/api/badusb/shutdown')">⏻ Выключить ПК</button>
+                <button class="btn" onclick="api('/api/badusb/wallpaper')">🖼️ Сменить обои</button>
+                <button class="btn btn-danger" onclick="api('/api/badusb/disableicons')">🗑️ Отключить иконки</button>
+                <button class="btn btn-danger" onclick="api('/api/badusb/dumpwifi')">📶 Слить Wi-Fi</button>
+                <div class="status-box" id="badusb-log">Готов</div>
+            </div>
+        </div>
+
+        <!-- EVIL PORTAL -->
+        <div id="evil" class="tab-content">
+            <div class="card">
+                <h3>🚨 Evil Portal (Captive Portal)</h3>
+                <button class="btn btn-danger" onclick="api('/api/portal/start')">🚀 Запустить</button>
+                <button class="btn btn-sec" onclick="api('/api/portal/stop')">🛑 Остановить</button>
+                <button class="btn" onclick="api('/api/portal/creds')">📥 Получить учётные</button>
+                <button class="btn btn-sec" onclick="api('/api/portal/creds/list')">📋 Список</button>
+                <div class="status-box" id="evil-log">Статус: Остановлен</div>
+            </div>
+        </div>
+
+        <!-- WEB REMOTE -->
+        <div id="web" class="tab-content">
+            <div class="card">
+                <h3>🌍 Управление через веб (эта же страница)</h3>
+                <button class="btn" onclick="api('/api/web/status')">📡 Статус</button>
+                <div class="status-box" id="web-log">Web Remote активен</div>
+            </div>
+        </div>
+
+        <!-- MOUSE -->
+        <div id="mouse" class="tab-content">
+            <div class="card">
+                <h3>🐭 Управление мышью (USB HID)</h3>
+                <div class="mouse-grid">
+                    <div></div><button class="btn" onclick="mouseMove(0,-20)">▲</button><div></div>
+                    <button class="btn" onclick="mouseMove(-20,0)">◄</button>
+                    <button class="btn btn-sec" onclick="mouseClick(2)">СК</button>
+                    <button class="btn" onclick="mouseMove(20,0)">►</button>
+                    <div></div><button class="btn" onclick="mouseMove(0,20)">▼</button><div></div>
+                </div>
+                <div class="grid-2">
+                    <button class="btn" onclick="mouseClick(1)">ЛКМ</button>
+                    <button class="btn" onclick="mouseClick(3)">ПКМ</button>
+                </div>
+                <div class="status-box" id="mouse-log">Мышь готова</div>
+            </div>
+        </div>
+
+        <!-- SYSTEM -->
+        <div id="system" class="tab-content">
+            <div class="card">
+    <h3>⚙️ Системная информация</h3>
+    <button class="btn" onclick="getSystemInfo()">🔄 Обновить</button>
+    <div class="status-box" id="sys-log">Загрузка...</div>
+    <hr>
+    <h3>🔊 Зуммер</h3>
+    <button class="btn" onclick="toggleBuzzer()">Вкл/Выкл Зуммер</button>
+    <div class="status-box" id="buzzer-log">Статус: ...</div>
 </div>
+        </div>
+    </div>
 
-<script>
-    let wifiNetworks=[];
+    <script>
+        function toggleFX() { document.getElementById('scanline').classList.toggle('disabled'); }
 
-    function showTab(id) {
-        document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
-        document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-        document.getElementById(id).classList.add('active');
-        event.target.classList.add('active');
-    }
+        function openTab(evt, tabName) {
+            let i, content, btn;
+            content = document.getElementsByClassName("tab-content");
+            for (i = 0; i < content.length; i++) content[i].classList.remove("active");
+            btn = document.getElementsByClassName("tab-btn");
+            for (i = 0; i < btn.length; i++) btn[i].classList.remove("active");
+            document.getElementById(tabName).classList.add("active");
+            evt.currentTarget.classList.add("active");
+        }
 
-    function apiCall(url) {
-        fetch(url).then(r=>r.json()).then(data=>{
-            alert(data.msg||'Выполнено');
-            if(data.uid) document.getElementById('rfid-info').innerText='Active UID: '+data.uid;
-            if(data.ir) document.getElementById('ir-info').innerText=data.ir;
-            if(data.count) document.getElementById('portal-creds').innerText=`Captured: ${data.count} | Last: ${data.last}`;
-            if(data.msg==='Evil Portal остановлен') updatePortalStatus(false);
-            if(data.msg==='Evil Portal запущен на дисплее!') updatePortalStatus(true);
-            if(data.msg==='Beacon Spam started') updateBeaconStatus(true);
-            if(data.msg==='Beacon Spam stopped') updateBeaconStatus(false);
-            if(data.msg==='Deauth started') updateDeauthStatus(true);
-            if(data.msg==='Deauth stopped') updateDeauthStatus(false);
-            if(data.msg==='BLE Spam started') updateBleStatus(true);
-            if(data.msg==='BLE Spam stopped') updateBleStatus(false);
-        }).catch(e=>alert('Ошибка'));
-    }
+        function api(url, callback) {
+            fetch(url).then(r => r.json()).then(data => {
+                if (callback) callback(data);
+            }).catch(e => console.error("API Error:", e));
+        }
 
-    function sendTypeString() {
-        let txt=document.getElementById('hid-text').value;
-        if(!txt) return alert('Введите текст!');
-        fetch('/api/hid/type?text='+encodeURIComponent(txt)).then(r=>r.json()).then(data=>alert(data.msg));
-    }
+        // DISPLAY
+        function setRotation() {
+            let val = document.getElementById('disp-rotation').value;
+            api('/api/display/rotation?val=' + val, d => {
+                document.getElementById('disp-status').innerText = d.msg;
+            });
+        }
+        function setBrightness() {
+            let val = document.getElementById('disp-bright').value;
+            api('/api/display/brightness?val=' + val, d => {
+                document.getElementById('disp-status').innerText = d.msg;
+            });
+        }
 
-    function getCreds() {
-        fetch('/api/portal/creds').then(r=>r.json()).then(data=>{
-            document.getElementById('portal-creds').innerText=`Captured: ${data.count} | Last: ${data.last}`;
+        // WIFI
+        function scanWifi() {
+            document.getElementById('wifi-log').innerText = "Сканирование...";
+            api('/api/wifi/scan', data => {
+                let txt = "Найденные сети:\n";
+                data.forEach(n => { txt += `${n.ssid} | RSSI: ${n.rssi}dBm | Ch: ${n.ch}\n`; });
+                document.getElementById('wifi-log').innerText = txt;
+            });
+        }
+
+        // BLE (вызывается из другой вкладки, но можно добавить)
+        function scanBLE() {
+            document.getElementById('ble-log').innerText = "Сканирование BLE...";
+            api('/api/ble/scan', data => {
+                let txt = "BLE Устройства:\n";
+                data.forEach(d => { txt += `${d.name || '[Hidden]'} | MAC: ${d.mac} | RSSI: ${d.rssi}\n`; });
+                document.getElementById('ble-log').innerText = txt;
+            });
+        }
+
+        // RFID
+        function readRFID() {
+            api('/api/rfid/scan', d => {
+                document.getElementById('rfid-log').innerText = d.msg + "\nUID: " + d.uid;
+            });
+        }
+
+        // IR
+        function getIR() {
+            api('/api/ir/get', d => {
+                document.getElementById('ir-log').innerText = d.ir;
+            });
+        }
+
+        // MOUSE
+        function mouseMove(x, y) { api(`/api/mouse/move?x=${x}&y=${y}`); }
+        function mouseClick(b) { api(`/api/mouse/click?button=${b}`); }
+
+        // SYSTEM
+        function getSystemInfo() {
+            api('/api/system/info', d => {
+                document.getElementById('sys-log').innerText =
+                    `Плата: ${d.board}\nSD Card: ${d.sd}\nHeap: ${d.heap} bytes\nRFID: ${d.rfid}\nIR: ${d.ir}`;
+            });
+        }
+        //Bluzzer
+        function toggleBuzzer() {
+    fetch('/api/system/buzzer?val=' + (currentBuzzer ? '0' : '1'))
+        .then(r => r.json()).then(d => {
+            currentBuzzer = d.buzzer;
+            document.getElementById('buzzer-log').innerText = 'Статус: ' + (currentBuzzer ? 'ВКЛ' : 'ВЫКЛ');
         });
-    }
+}
+let currentBuzzer = true; // Инициализировать с реальным значением, можно запросить при загрузке
 
-    function scanWifi() {
-        document.getElementById('wifi-results').innerHTML='<p class="status-box">Сканирование...</p>';
-        fetch('/api/wifi/scan').then(r=>r.json()).then(data=>{
-            wifiNetworks=data;
-            let html='<table><tr><th>SSID</th><th>RSSI</th><th>Ch</th></tr>';
-            data.forEach(n=>html+=`<tr><td>${n.ssid}</td><td>${n.rssi} dBm</td><td>${n.ch}</td></tr>`);
-            html+='</table>';
-            document.getElementById('wifi-results').innerHTML=html;
-            let select=document.getElementById('wifi-target');
-            select.innerHTML='<option value="">-- Выберите --</option>';
-            data.forEach((n,i)=>{let opt=document.createElement('option');opt.value=i;opt.textContent=n.ssid+' ('+n.rssi+' dBm)';select.appendChild(opt);});
-        });
-    }
-
-    function selectWifiTarget() {
-        let select=document.getElementById('wifi-target');
-        if(select.value==='') return alert('Выберите сеть');
-        fetch('/api/wifi/select?index='+select.value).then(r=>r.json()).then(data=>alert(data.msg));
-    }
-
-    function scanBle() {
-        document.getElementById('ble-results').innerHTML='<p class="status-box">Сканирование BLE...</p>';
-        fetch('/api/ble/scan').then(r=>r.json()).then(data=>{
-            let html='<table><tr><th>Name</th><th>MAC</th><th>RSSI</th></tr>';
-            data.forEach(d=>html+=`<tr><td>${d.name||'[Hidden]'}</td><td>${d.mac}</td><td>${d.rssi}</td></tr>`);
-            html+='</table>';
-            document.getElementById('ble-results').innerHTML=html;
-        });
-    }
-
-    function loadCredsList() {
-        document.getElementById('creds-list').innerText='Загрузка...';
-        fetch('/api/portal/creds/list').then(r=>r.json()).then(data=>{
-            let html=data.length===0?'Нет записей.':data.map((l,i)=>`${i+1}. ${l}`).join('\n');
-            document.getElementById('creds-list').innerText=html;
-        }).catch(e=>document.getElementById('creds-list').innerText='Ошибка');
-    }
-
-    function loadIrSavedList() {
-        document.getElementById('ir-saved-list').innerText='Загрузка...';
-        fetch('/api/ir/saved/list').then(r=>r.json()).then(data=>{
-            let html=data.length===0?'Нет сигналов.':data.map((l,i)=>`${i}. ${l}`).join('\n');
-            document.getElementById('ir-saved-list').innerText=html;
-        }).catch(e=>document.getElementById('ir-saved-list').innerText='Ошибка');
-    }
-
-    function updatePortalStatus(a){ let i=document.getElementById('portal-status'); let t=document.getElementById('portal-status-text'); if(a){i.className='status-indicator status-on';t.innerText='Running';}else{i.className='status-indicator status-off';t.innerText='Stopped';} }
-    function updateBeaconStatus(a){ let i=document.getElementById('beacon-status'); let t=document.getElementById('beacon-status-text'); if(a){i.className='status-indicator status-on';t.innerText='Active';}else{i.className='status-indicator status-off';t.innerText='Stopped';} }
-    function updateDeauthStatus(a){ let i=document.getElementById('deauth-status'); let t=document.getElementById('deauth-status-text'); if(a){i.className='status-indicator status-on';t.innerText='Active';}else{i.className='status-indicator status-off';t.innerText='Stopped';} }
-    function updateBleStatus(a){ let i=document.getElementById('ble-status'); let t=document.getElementById('ble-status-text'); if(a){i.className='status-indicator status-on';t.innerText='Active';}else{i.className='status-indicator status-off';t.innerText='Stopped';} }
-
-    // Mouse control
-    function mouseMove(dx, dy) {
-        fetch('/api/mouse/move?x='+dx+'&y='+dy).then(r=>r.json()).then(data=>console.log(data));
-    }
-    function mouseClick(btn) {
-        fetch('/api/mouse/click?button='+btn).then(r=>r.json()).then(data=>console.log(data));
-    }
-    function mouseScroll(delta) {
-        fetch('/api/mouse/scroll?delta='+delta).then(r=>r.json()).then(data=>console.log(data));
-    }
-
-    document.addEventListener('DOMContentLoaded',function(){ loadCredsList(); });
-</script>
+        // Дополнительные: для BLE и других вкладок добавим обработчики
+        window.scanBLE = scanBLE;
+    </script>
 </body>
 </html>
 )rawliteral";
