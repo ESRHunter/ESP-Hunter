@@ -356,8 +356,8 @@
         <div class="container nav">
             <a href="index.html" class="logo">&gt;_ ESP-HUNTER</a>
             <div class="nav-links">
-                <a href="index.html" class="nav-link">Главная</a>
-                <a href="pinout.html" class="nav-link active">[ Pinout ]</a>
+                <a href="index.html" class="nav-link">[ Главная ]</a>
+                <a href="pinout.html" class="nav-link active">Pinout</a>
                 <a href="flasher.html" class="nav-link">[ Flasher ]</a>
 
             </div>
@@ -381,6 +381,7 @@
             <button class="filter-btn" data-filter="nfc">PN532 RFID</button>
             <button class="filter-btn" data-filter="ir">ИК TX/RX</button>
             <button class="filter-btn" data-filter="btn">Кнопки D-Pad</button>
+            <button class="filter-btn" data-filter="bluz">Bluzzer</button>
         </div>
 
         <!-- SVG Схема -->
@@ -416,16 +417,18 @@
                     <text x="60" y="205" class="pin-label">CS   → GPIO 10</text>
                     <text x="60" y="225" class="pin-label">DC   → GPIO 9</text>
                     <text x="60" y="245" class="pin-label">RST  → GPIO 8</text>
+                    <text x="60" y="265" class="pin-label">LED  → GPIO 21</text>
                     <line x1="230" y1="165" x2="360" y2="165" class="line" />
                     <line x1="230" y1="185" x2="360" y2="185" class="line" />
                     <line x1="230" y1="205" x2="360" y2="205" class="line" />
                     <line x1="230" y1="225" x2="360" y2="225" class="line" />
                     <line x1="230" y1="245" x2="360" y2="245" class="line" />
+                    <line x1="230" y1="265" x2="360" y2="265" class="line" />
                 </g>
 
                 <!-- MicroSD -->
                 <g class="mod-group" data-mod="sd">
-                    <rect x="50" y="310" width="180" height="150" rx="5" class="box" />
+                    <rect x="50" y="310" width="180" height="135" rx="5" class="box" />
                     <text x="140" y="335" text-anchor="middle" class="module-title">MicroSD Slot</text>
                     <text x="140" y="355" text-anchor="middle" fill="#7aa387" font-size="10">Shared SPI</text>
                     <text x="60" y="380" class="pin-label">CS   → GPIO 15</text>
@@ -440,7 +443,7 @@
 
                 <!-- PN532 RFID -->
                 <g class="mod-group" data-mod="nfc">
-                    <rect x="670" y="90" width="180" height="110" rx="5" class="box" />
+                    <rect x="670" y="90" width="180" height="100" rx="5" class="box" />
                     <text x="760" y="118" text-anchor="middle" class="module-title">PN532 RFID</text>
                     <text x="760" y="138" text-anchor="middle" fill="#7aa387" font-size="10">I2C Bus</text>
                     <text x="680" y="163" class="pin-label">SDA → GPIO 1</text>
@@ -460,9 +463,18 @@
                     <line x1="670" y1="323" x2="540" y2="323" class="line" />
                 </g>
 
+                <!-- Bluzzer -->
+                <g class="mod-group" data-mod="bluzzer">
+                    <rect x="670" y="355" width="180" height="80" rx="5" class="box" />
+                    <text x="760" y="383" text-anchor="middle" class="module-title">Bluzzer</text>
+                    <text x="760" y="403" text-anchor="middle" fill="#7aa387" font-size="10">Sound</text>
+                    <text x="680" y="428" class="pin-label">+ → GPIO 14</text>
+                    <line x1="670" y1="428" x2="540" y2="428" class="line" />
+                </g>
+
                 <!-- D-Pad Buttons -->
                 <g class="mod-group" data-mod="btn">
-                    <rect x="50" y="490" width="180" height="130" rx="5" class="box" />
+                    <rect x="50" y="490" width="180" height="115" rx="5" class="box" />
                     <text x="140" y="515" text-anchor="middle" class="module-title">D-Pad Buttons</text>
                     <text x="60" y="540" class="pin-label">UP   → GPIO 4</text>
                     <text x="60" y="560" class="pin-label">DOWN → GPIO 5</text>
@@ -534,6 +546,13 @@
                             <td><span class="gpio-badge">GPIO 8</span></td>
                             <td>Output</td>
                             <td>Линия аппаратного сброса</td>
+                        </tr>
+                        <tr data-mod="tft">
+                            <td>TFT ST7735</td>
+                            <td>DATA</td>
+                            <td><span class="gpio-badge">GPIO 21</span></td>
+                            <td>Output</td>
+                            <td>Регулировка подсветки</td>
                         </tr>
                         <tr data-mod="sd">
                             <td>MicroSD Slot</td>
@@ -618,6 +637,13 @@
                             <td><span class="gpio-badge">GPIO 6</span></td>
                             <td>INPUT_PULLUP</td>
                             <td>Кнопка Назад (на GND)</td>
+                        </tr>
+                        <tr data-mod="bluz">
+                            <td>Bluzzer</td>
+                            <td>Bluzzer vcc</td>
+                            <td><span class="gpio-badge">GPIO 14</span></td>
+                            <td>Input</td>
+                            <td>Регулировка звука</td>
                         </tr>
                     </tbody>
                 </table>
